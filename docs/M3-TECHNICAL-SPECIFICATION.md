@@ -1,9 +1,24 @@
 # OpenAudit M3 Technical Specification: Two-Engine Architecture & Vulnerability Intelligence
 
-**Document Version:** 1.0.0  
-**Status:** Architecture & Engineering Specification  
+**Document Version:** 1.1.0  
+**Status:** Architecture & Engineering Specification (Review in Progress)  
 **Preceding Milestone:** `v0.2.0-m2` (Frozen)  
 **Author:** Lead Software Architect & Security Researcher  
+
+---
+
+### Architecture Review Governance Status
+
+| Dimension | Scope | Review Status |
+| :--- | :--- | :--- |
+| **Dimension 1** | Debian Version Comparison Correctness (Debian Policy §5.6.12) | **CLOSED** (32 Verified Cases) |
+| **Dimension 2** | Ubuntu USN & Debian Advisory Matching Semantics | **CLOSED** (15 Conformance Cases) |
+| **Dimension 3** | Source-to-Binary CVE-to-Package Mapping & Exposure | **CLOSED** (27 Conformance Cases) |
+| **Dimension 4** | Confidence Classification Consistency & Trigger Matrix | **PENDING** |
+| **Dimension 5** | Database Synchronization, Integrity & Provenance | **PENDING** |
+| **Dimension 6** | Universal Secret Redaction Across Vulnerability Outputs | **PENDING** |
+
+> **M3 Implementation Boundary:** M2 (`v0.2.0-m2`) is immutable and frozen. M3 implementation remains strictly on **HOLD** until all six architecture dimensions pass formal review approval.  
 
 ---
 
@@ -190,6 +205,157 @@ impl<'a> DebianVersion<'a> {
 }
 ```
 
+### 3.4 Five Independent Assessment Dimensions & Source-to-Binary Relationship Model
+
+OpenAudit's vulnerability intelligence enforces a foundational governing principle:
+
+> **Governing Principle:** *OpenAudit must distinguish what is installed, what the vendor states is affected, what evidence connects the two, and what is actually running.*
+
+To prevent false confidence and semantic confusion, vulnerability findings are decomposed into five mutually independent dimensions:
+
+```rust
+/// 1. Vulnerability state according to vendor advisory criteria
+/// Evaluated ONLY when an applicable installed package exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VulnerabilityAssessment {
+    Affected,
+    NotAffected,
+    Inconclusive,
+}
+
+/// 2. Evidence linking installed package artifacts to the advisory
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MappingEvidence {
+    pub source_match: bool,
+    pub binary_match: bool,
+    pub binary_scope_completeness: BinaryScopeCompleteness,
+    pub advisory_version_basis: AdvisoryVersionBasis,
+    pub patch_lineage: PatchLineageEvidence,
+    pub dependency_evidence: Vec<DependencyEvidence>,
+    pub kernel_association: Option<KernelAssociationEvidence>,
+    pub artifact_nature: ArtifactNature,
+}
+
+/// Explicit completeness guarantee of advisory binary package lists
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BinaryScopeCompleteness {
+    /// Vendor contract explicitly guarantees the list is complete and exhaustive.
+    /// Only under this contract does omitting an installed binary support NotAffected.
+    Exhaustive(Vec<String>),
+    /// Vendor enumerates affected binaries descriptively, but does NOT guarantee completeness.
+    /// Omission from a descriptive list CANNOT be used to infer NotAffected.
+    Descriptive(Vec<String>),
+    /// Derived from multi-criteria OVAL / OSV definitions
+    Derived { exhaustive: bool, binaries: Vec<String> },
+    /// Advisory specifies source package only; no binary list provided
+    Unspecified,
+    /// Feed format does not define binary relationships
+    Unsupported,
+}
+
+/// Explicit basis for version comparison (resolves Dimension 2 contract)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdvisoryVersionBasis {
+    SourcePackageVersion,  // Evaluated against installed_package.source_version
+    BinaryPackageVersion,  // Evaluated against installed_package.binary_version
+    VendorDefined(String), // Documented feed-specific evaluation contract
+    Unsupported,           // Undefined version basis -> Inconclusive
+}
+
+/// Formal patch-lineage evidence for third-party and PPA builds
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchLineageEvidence {
+    VerifiedContainsVendorPatch, // Cryptographically or deterministically verified to contain vendor security fix
+    VerifiedLacksVendorPatch,    // Verified build artifacts confirm vendor security fix is absent
+    VerifiedBuildAndPatchSet,    // Source repo and build set verified, but specific patch state unconfirmed (Inconclusive)
+    Unverified,                  // Lineage cannot be verified against vendor patch history
+    Unknown,                     // Lineage inspection unsupported or unperformed
+}
+
+/// Static nature of the installed artifact (independent of runtime process scanning)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactNature {
+    ExecutableOrLibrary,        // Standard binaries, daemons, shared objects
+    NonExecutableDocumentation, // Manpages, HTML docs, examples (libc6-dev-doc)
+    DevelopmentHeaders,         // C/C++ header files (linux-headers-*)
+    DataOrAssets,               // Static dictionaries, fonts, themes
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DependencyEvidence {
+    DeclaredDependency { dependent_pkg: String, constraint: String },
+    ResolvedDependency { dependent_pkg: String, resolved_version: String },
+}
+
+/// Manifest- and runtime-backed kernel association evidence
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelAssociationEvidence {
+    pub package_kernel_release: String,
+    pub running_kernel_release: String,
+    pub package_role: KernelPackageRole,
+    pub ownership_evidence: KernelOwnershipEvidence,
+    pub runtime_module_evidence: Option<RuntimeModuleEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KernelPackageRole {
+    KernelImage,   // Executable kernel binary (/boot/vmlinuz-<release>)
+    RuntimeModule, // Core loadable kernel module tree (/lib/modules/<release>/kernel/...)
+    ExtraModule,   // Out-of-tree / DKMS module tree (/lib/modules/<release>/kernel/extra/...)
+    Headers,       // Development C headers (/usr/src/linux-headers-<release>)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KernelOwnershipEvidence {
+    VerifiedFileOwnership { path: String, package: String },
+    ManifestAssociation { manifest_key: String, release: String },
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeModuleEvidence {
+    LoadedInKernel { module_name: String, source_file: String },
+    NotObservedInKernel,
+    InspectionUnavailable,
+}
+
+/// 5. Operational execution state on the host
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationalExposure {
+    Active,            // Direct runtime evidence (verified PID executable or loaded kernel/module)
+    InstalledInactive, // Component verified installed but inactive within defined inspection scope
+    Unknown,           // No direct runtime evidence available (baseline M3 state for packages/libraries)
+}
+```
+
+#### Key Evidentiary Contracts & Qualifications:
+
+1. **Kernel Image Association Qualification:**
+   - Association between an installed package and the running kernel is established by verifying that the package manifest owns `/boot/vmlinuz-<release>` where `<release>` matches `uname -r`.
+   - This represents **verified package-to-running-release association**. It does **not** claim cryptographic byte-level verification of the booted memory image against the on-disk file.
+2. **Role-Specific Kernel Evidence:**
+   - `runtime_module_evidence` is strictly required only for module package roles (`RuntimeModule`, `ExtraModule`). Kernel images and development headers do not require module-loading evidence.
+3. **Loaded Kernel Module Attribution Qualification:**
+   - `LoadedInKernel` constitutes runtime module identity evidence (via `/proc/modules` or `/sys/module`). Package-file ownership provides the corresponding package association. Byte-level or cryptographic attribution of the in-memory loaded module is not claimed.
+4. **Kernel Operational Status Derivation:**
+   - If `package_role == KernelImage` AND `package_kernel_release == running_kernel_release` with verified file ownership $\rightarrow$ eligible for `OperationalExposure::Active`.
+   - If `package_kernel_release != running_kernel_release` $\rightarrow$ operational status is dormant $\rightarrow$ `OperationalExposure::InstalledInactive`.
+   - If `runtime_module_evidence == NotObservedInKernel` $\rightarrow$ `OperationalExposure::Unknown` (absence from `/proc/modules` does not constitute conclusive proof of inactivity).
+5. **Operational Exposure Rigor: "Package Type is Not Runtime Evidence":**
+   - Active process association requires `/proc/<pid>/exe` to resolve to an executable file owned by the assessed package. Process name matching alone is strictly invalid.
+   - For shared libraries and CLI packages without dynamic process/memory inspection, exposure defaults to `OperationalExposure::Unknown`.
+   - Fixed packages (`VulnerabilityAssessment::NotAffected`) evaluate operational exposure independently (`OperationalExposure::Unknown` unless runtime inspection establishes another state). `N/A` is reserved strictly for inventory absence and provenance-only fixtures.
+6. **Inventory Absence vs. Applicability:**
+   - When an advisory targets a package that is not installed on the system (e.g. Apache missing, or meta-package only), OpenAudit produces **no finding** (Inventory Absence).
+   - `VulnerabilityAssessment::NotAffected` is strictly reserved for applicable installed packages whose version or criteria verify they are safe.
+
 ---
 
 ## 4. Distro Advisory Ingestion & The Backport Dilemma
@@ -332,6 +498,38 @@ Verified 1:1 against reference `dpkg 1.22.6` (Ubuntu 24.04 arm64):
 | **D2-14** | Missing or corrupted feed metadata | Report `Confidence::Unknown` with integrity error. |
 | **D2-15** | Malformed advisory fixed version string | Reject malformed record; alert operator to feed corruption. |
 
+### 7.3 Dimension 3: Source-to-Binary Mapping & Package Relationship Conformance (27 Cases)
+
+| Test ID | Category | Scenario / Input | Vulnerability Assessment | Mapping Evidence & Scope | Confidence | Operational Exposure | Expected Evaluation Behavior |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **D3-01** | Direct Binary | Advisory lists binary `openssl 3.0.13-0ubuntu3.1`. Host has `openssl 3.0.13-0ubuntu3.0` | `Affected` | `binary_match: true`, `BinaryPackageVersion` | `Confirmed` | `Unknown` | Exact binary version match; exposure unknown without memory map |
+| **D3-02** | Direct Binary Safe | Advisory fixed in `3.0.13-0ubuntu3.1`. Host has `openssl 3.0.13-0ubuntu3.2` | `NotAffected` | `binary_match: true`, `BinaryPackageVersion` | `Confirmed` | `Unknown` | Fixed binary installed; operational exposure evaluated independently as `Unknown` |
+| **D3-03** | Multi-Binary Source Match | Source `src:curl` vulnerable. Host has `curl 7.88.1-10`. Advisory lists `curl` and `libcurl4` | `Affected` | `source_match: true`, `Exhaustive(["curl", "libcurl4"])`, `SourcePackageVersion` | `Confirmed` | `Unknown` | CLI package exposure is `Unknown` without active process inspection |
+| **D3-04** | Multi-Binary Exhaustive Exclusion | Source `src:curl` vulnerable in `libcurl4` only. Advisory contract guarantees exhaustive binary list. Host has `curl 7.88.1-10` only | `NotAffected` | `source_match: true`, `binary_match: false`, `Exhaustive(["libcurl4"])` | `Confirmed` | `Unknown` | Exhaustive binary list excludes installed binary -> safe |
+| **D3-05** | Daemon Process Association | Source `src:systemd` vulnerable. Vendor lists no binaries. Host has `udev 255.4-1ubuntu8`. `/proc/123/exe` points to package-owned `/usr/lib/systemd/systemd-udevd` | `Affected` | `source_match: true`, `Unspecified`, `SourcePackageVersion` | `LikelyVulnerable` | `Active` | Verified package-owned daemon executable via `/proc/<pid>/exe` |
+| **D3-06** | Documentation Sub-package | Source `src:glibc` vulnerable. Host has `libc6-dev-doc` only. Advisory is `Exhaustive(["libc6"])` | `NotAffected` | `source_match: true`, `Exhaustive(["libc6"])`, `NonExecutableDocumentation` | `Confirmed` | `InstalledInactive` | Non-executable artifact excluded by exhaustive binary list |
+| **D3-07** | Running Kernel Image | Advisory affects kernel `6.8.0-31.31`. Host runs `uname -r = 6.8.0-31-generic`. Package owns `/boot/vmlinuz-6.8.0-31-generic` | `Affected` | `binary_match: true`, `VerifiedFileOwnership`, `KernelImage`, `release == running` | `Confirmed` | `Active` | Verified package-to-running-release association |
+| **D3-08** | Running Kernel Fixed | Advisory fixed in `6.8.0-35.35`. Host runs `6.8.0-35-generic`. Package owns `/boot/vmlinuz-6.8.0-35-generic` | `NotAffected` | `binary_match: true`, `VerifiedFileOwnership`, `KernelImage`, `release == running` | `Confirmed` | `Active` | Running kernel image verified and fixed |
+| **D3-09** | Dormant Kernel Vulnerable | Host boots `6.8.0-35-generic`. Package `linux-image-6.8.0-31-generic` owns `/boot/vmlinuz-6.8.0-31-generic` | `Affected` | `binary_match: true`, `VerifiedFileOwnership`, `KernelImage`, `release != running` | `Confirmed` | `InstalledInactive` | Dormant kernel affected; inactive derived from release mismatch |
+| **D3-10** | Dormant Kernel Multiple | Host boots `6.8.0-35-generic`. Two older dormant kernels with verified ownership: `6.8.0-28` and `6.8.0-31` | `Affected` (for each) | `binary_match: true`, `VerifiedFileOwnership`, `KernelImage`, `release != running` | `Confirmed` | `InstalledInactive` | Independent findings per dormant package; both confirmed inactive |
+| **D3-11** | Kernel Meta-Package Only | Advisory affects `linux-image-6.8.0-31-generic`. Host has only meta-package `linux-generic` installed | **No Finding** (Inventory Absence) | `binary_match: false`, `ownership: none` | N/A | N/A | Meta-package contains no kernel files; implementation package absent |
+| **D3-12** | Multi-Arch Disjoint | Advisory targets `amd64` binary only. Host has `libssl3:arm64` installed | `NotAffected` | `binary_match: true`, `architecture: mismatch` | `Confirmed` | `Unknown` | Architecture filter excludes installed package |
+| **D3-13** | Arch: All Package | Advisory affects `python3-urllib3` (`Architecture: all`). Advisory architecture `Unrestricted` | `Affected` | `binary_match: true`, `Arch: all`, `Unrestricted` | `Confirmed` | `Unknown` | Architecture-independent package affected across architectures |
+| **D3-14** | Multi-Arch Co-installation | Host has `libssl3:amd64` and `libssl3:i386`. Advisory affects both | `Affected` (for each) | `binary_match: true` | `Confirmed` | `Unknown` | Evaluated independently per `(binary_name, architecture)` |
+| **D3-15** | Library Dependency Exposure | Nginx is running and depends on `libssl3`. Advisory affects `libssl3`. No `/proc/<pid>/maps` inspection | `Affected` (on `libssl3`) | `DeclaredDependency`, `ResolvedDependency` | `Confirmed` | `Unknown` | Finding stands at package level; library runtime loading unverified |
+| **D3-16** | Uninstalled Advisory Match | Advisory affects `apache2`. Host has no `apache2` package installed | **No Finding** (Inventory Absence) | `binary_match: false`, `source_match: false` | N/A | N/A | Suppressed from host findings (no applicable artifact) |
+| **D3-17** | Custom Local Build | Host has `openssl 3.0.13-custom`. Advisory for `3.0.13-0ubuntu3.1` | `Inconclusive` | `source_match: true`, `binary_match: true`, `patch_lineage: Unknown` | `RequiresVerification` | `Unknown` | Provenance unknown; version scheme non-standard |
+| **D3-18** | Third-Party PPA Lineage Uncertainty | Host has `python3.11` from `ppa:deadsnakes`. Advisory from Ubuntu Security Archive. Upstream source matches, patch history unverified | `Inconclusive` | `source_match: true`, `patch_lineage: Unverified` | `RequiresVerification` | `Unknown` | Source identity matches but patch lineage unverified -> Inconclusive |
+| **D3-19** | Version Basis Disparity | Binary version is `1.2-1`, Source version is `1.2-0ubuntu1`. Advisory basis is `SourcePackageVersion` fixed in `1.2-0ubuntu2` | `Affected` | `source_match: true`, `SourcePackageVersion` | `Confirmed` | `Unknown` | Explicitly evaluates `source_version` against advisory threshold |
+| **D3-20** | Derived Binary Scope | OVAL criteria specify `obj_id` linking binary `git` to source `src:git` | `Affected` | `Derived { exhaustive: true, ... }` | `Confirmed` | `Unknown` | Multi-criteria OVAL successfully derived to binary package |
+| **D3-21** | Single-Binary Source Match | Source `src:nano` produces single binary `nano`. Advisory lists `src:nano` with `Unspecified` binary scope | `Affected` | `source_match: true`, `Unspecified`, `SourcePackageVersion` | `LikelyVulnerable` | `Unknown` | Source-only advisory for single-binary package; vendor linkage strong |
+| **D3-22** | Provenance Record Verification | Package record matches signed `Packages.xz` digest from authenticated `Release` file | N/A (Outside Scope) | `VerifiedRepositoryMatch` | N/A (Outside Scope) | N/A (Outside Scope) | Authenticated repo index match; does not prove file contents or CVE |
+| **D3-23** | Kernel Module Loaded Match | Host runs `6.8.0-31-generic`. Package owns `/lib/modules/6.8.0-31-generic/kernel/net/wireguard.ko`. `/proc/modules` contains `wireguard` | `Affected` | `binary_match: true`, `VerifiedFileOwnership`, `LoadedInKernel` | `Confirmed` | `Active` | Active kernel module verified loaded via `/proc/modules` |
+| **D3-24** | Kernel Headers Package | Host runs `6.8.0-31-generic`. Package `linux-headers-6.8.0-31-generic` owns `/usr/src/linux-headers-6.8.0-31-generic/` | `Affected` | `binary_match: true`, `VerifiedFileOwnership`, `Headers` | `Confirmed` | `InstalledInactive` | Headers are development artifacts; strictly `InstalledInactive` |
+| **D3-25** | Provenance Without History | Package record verified against signed repository index, but `dpkg.log` historical installation source absent | N/A (Outside Scope) | `VerifiedRepositoryMatch` | N/A (Outside Scope) | N/A (Outside Scope) | Valid repo index match established without claiming historical origin |
+| **D3-26** | Kernel Module Not Observed Loaded | Package `linux-modules-extra-6.8.0-31-generic` owns `/lib/modules/6.8.0-31-generic/kernel/extra/foo.ko`. Module `foo` absent from `/proc/modules` | `Affected` | `binary_match: true`, `VerifiedFileOwnership`, `NotObservedInKernel` | `Confirmed` | `Unknown` | Module not observed in inspected runtime interfaces; inactivity unproven |
+| **D3-27** | Descriptive Non-Exhaustive Binary List | Advisory lists `libcurl4` descriptively (`Descriptive(["libcurl4"])`). Host has `curl` installed. Advisory feed does not guarantee exhaustiveness | `Inconclusive` | `source_match: true`, `Descriptive(["libcurl4"])` | `RequiresVerification` | `Unknown` | Omission from non-exhaustive list cannot yield `NotAffected` |
+
 ---
 
 ## 8. M3 Implementation Phasing & Milestones
@@ -357,28 +555,7 @@ M3.4: Confidence Engine & Uncertainty Modeling (Weeks 15–18)
 
 M3.5: Multi-Distro Lab Matrix & Benchmarks (Weeks 19–24)
       - Execute 15 Dimension 2 synthetic test fixtures.
-      - Benchmark accuracy and memory footprint against Trivy and OSV-Scanner.
-      - Publish M3 Lab Evaluation & Benchmark Report.
-```
-      - Refactor HostInspectionContext into modular sub-contexts.
-      - Verify zero regression on M2 55-scenario suite.
-
-M3.2: Package Inventory & Version Normalization (Weeks 5–8)
-      - Implement /var/lib/dpkg/status reader.
-      - Implement Debian Policy §5.6.12 version comparison engine.
-      - Add 40 unit tests for complex epoch and tilde comparisons.
-
-M3.3: Distribution Advisory Database & USN Matching (Weeks 9–14)
-      - Implement local sqlite/compact-json advisory cache.
-      - Build Ubuntu USN and Debian Security Tracker parser.
-      - Implement backport-aware matching algorithm.
-
-M3.4: Confidence Engine & Uncertainty Modeling (Weeks 15–18)
-      - Implement 4-tier confidence classification.
-      - Add DatabaseProvenance metadata to JSON report schema.
-
-M3.5: Multi-Distro Lab Matrix & Benchmarks (Weeks 19–24)
-      - Expand lab to evaluate 30 vulnerable/patched package fixtures.
+      - Execute 27 Dimension 3 package mapping and relationship test fixtures.
       - Benchmark accuracy and memory footprint against Trivy and OSV-Scanner.
       - Publish M3 Lab Evaluation & Benchmark Report.
 ```
