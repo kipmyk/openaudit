@@ -3,4 +3,12 @@ doc-valid-idents = [
     "PostgreSQL",
     "OpenSearch",
     "OpenVAS",
+    "KiB",
+    "x86_64",
+    "aarch64",
+    "sshd_config",
+    "nftables",
+    "iptables",
+    "IPv4",
+    "IPv6",
 ]
