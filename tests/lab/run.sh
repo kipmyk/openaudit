@@ -40,6 +40,42 @@ case "$ID" in
     S21) chmod 0666 /etc/sudoers ;;
     S22) chmod 0644 /etc/shadow; chmod 0666 /etc/passwd ;;
     S23) chmod 0666 "$SSHD" ;;
+    S24) sed -i 's/^X11Forwarding no/X11Forwarding yes/' "$SSHD" ;;
+    S25) sed -i 's/^MaxAuthTries 4/MaxAuthTries 10/' "$SSHD" ;;
+    S26) sed -i '/^MaxAuthTries/d' "$SSHD" ;;
+    S27) chsh -s /bin/bash www-data ;;
+    S28) chsh -s /usr/sbin/nologin www-data ;;
+    S29) echo 'alice ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers ;;
+    S30) echo 'bob ALL=(ALL) NOPASSWD:/bin/bash' > /etc/sudoers.d/90-bob && chmod 0440 /etc/sudoers.d/90-bob ;;
+    S31) ;; # hardened sudoers control
+    S32) usermod -aG sudo alice ;;
+    S33) ;; # hardened sudo group control
+    S34) chmod 0666 /etc/group ;;
+    S35) chmod 0644 /etc/group ;;
+    S36) nft flush ruleset
+         iptables -F
+         iptables -P INPUT DROP
+         iptables -A INPUT -i lo -j ACCEPT
+         iptables -A INPUT -m state --state ESTABLISHED -j ACCEPT ;;
+    S37) nft flush ruleset
+         iptables -F
+         iptables -P INPUT ACCEPT ;;
+    S38) listen 4 0.0.0.0 22 ;;
+    S39) listen 4 127.0.0.1 22 ;;
+    S40) listen_udp 4 0.0.0.0 53 ;;
+    S41) listen_udp 4 127.0.0.1 53 ;;
+    S42) listen 4 0.0.0.0 8080 ;;
+    S43) cp /bin/bash /tmp/setuid-bash && chmod 4755 /tmp/setuid-bash ;;
+    S44) ;; # standard SUID control
+    S45) cp /bin/cat /tmp/shadow-reader && chmod 2755 /tmp/shadow-reader ;;
+    S46) ;; # standard SGID control
+    S47) mkdir -p /tmp/evil && chmod 0777 /tmp/evil && export PATH="/tmp/evil:$PATH" ;;
+    S48) ;; # hardened PATH control
+    S49) echo 0 > /tmp/val && mount --bind /tmp/val /proc/sys/kernel/dmesg_restrict ;;
+    S50) echo 1 > /tmp/val && mount --bind /tmp/val /proc/sys/kernel/dmesg_restrict ;;
+    S51) echo 1 > /tmp/val && mount --bind /tmp/val /proc/sys/net/ipv4/ip_forward ;;
+    S52) echo 0 > /tmp/val && mount --bind /tmp/val /proc/sys/net/ipv4/ip_forward ;;
+    S53) echo 0 > /tmp/val && mount --bind /tmp/val /proc/sys/kernel/randomize_va_space ;;
     *) echo "unknown scenario $ID" >&2; exit 2 ;;
 esac
 
