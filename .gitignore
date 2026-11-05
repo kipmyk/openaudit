@@ -31,3 +31,7 @@ id_ed25519
 *.lcov
 /scratch/
 /tmp/
+
+# Whitelist project test directories (overriding any global gitignore)
+!tests/
+!**/tests/
