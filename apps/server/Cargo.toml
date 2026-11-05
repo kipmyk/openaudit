@@ -1,0 +1,18 @@
+[package]
+name = "openaudit-server"
+description = "Control plane API, persistence layer, and task scheduler for OpenAudit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openaudit-core = { workspace = true }
+openaudit-engine = { workspace = true }
