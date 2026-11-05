@@ -8,10 +8,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        openssh-server nftables iptables ufw sudo python3 passwd \
+        openssh-server nftables iptables ufw sudo python3 passwd iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Unprivileged accounts used by scenarios.
 RUN useradd -m -s /bin/bash auditor \
-    && useradd -m -s /bin/bash alice
+    && useradd -m -s /bin/bash alice \
+    && useradd -m -s /bin/bash bob
 
