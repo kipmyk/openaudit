@@ -46,6 +46,6 @@ pub trait Rule: Send + Sync {
     /// Privilege level necessary to evaluate this rule.
     fn required_privilege(&self) -> PrivilegeLevel;
 
-    /// Evaluates host inspection telemetry, returning a finding if a violation is detected.
-    fn evaluate(&self, context: &HostInspectionContext) -> Option<RuleFinding>;
+    /// Evaluates host inspection telemetry, returning all findings where violations are detected.
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding>;
 }
