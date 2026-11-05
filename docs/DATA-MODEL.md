@@ -226,3 +226,4 @@ SET LOCAL app.current_organization_id = '...';
 1. **Evidence Retention:** Detailed evidence payloads are partitioned or automatically purged after a configurable retention window (default: 90 days), while aggregate finding metadata is retained permanently for historical drift analysis.
 2. **Scan Job Log Retention:** Completed and failed job queue entries in `scan_jobs` are pruned after 30 days to keep index sizes minimal.
 3. **Audit Log Immutability:** `audit_logs` records are append-only. No `UPDATE` or `DELETE` grants are assigned to standard application database roles.
+
