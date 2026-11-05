@@ -24,6 +24,8 @@ use crate::rule::Rule;
 /// An individual finding paired with its sanitized, size-bounded evidence record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditFindingItem {
+    /// Inspected target resource or configuration setting.
+    pub target: String,
     /// The core security finding.
     pub finding: Finding,
     /// Supporting sanitized technical evidence.
@@ -139,7 +141,11 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
                 let evidence = Evidence::new(finding.id, rule_finding.evidence_type, payload);
 
                 summary.record(finding.severity);
-                finding_items.push(AuditFindingItem { finding, evidence });
+                finding_items.push(AuditFindingItem {
+                    target: rule_finding.target,
+                    finding,
+                    evidence,
+                });
             }
         }
 
