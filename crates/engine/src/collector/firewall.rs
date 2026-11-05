@@ -83,7 +83,10 @@ impl FirewallInfo {
         // 2. Try nft list ruleset
         match runner.run("nft", &["list", "ruleset"]) {
             Ok(output) => {
-                if !output.trim().is_empty() {
+                let has_filtering = output.contains("policy drop")
+                    || output.contains("drop")
+                    || output.contains("reject");
+                if has_filtering {
                     return Self {
                         kind: FirewallKind::Nftables,
                         status: FirewallStatus::Active,
