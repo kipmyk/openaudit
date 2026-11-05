@@ -136,6 +136,23 @@ impl Asset {
             updated_at: now,
         })
     }
+
+    /// Constructs and validates an [`Asset`] with an explicit, deterministic [`AssetId`].
+    ///
+    /// # Errors
+    /// Returns [`DomainError::EmptyField`] or [`DomainError::FieldTooLong`] if
+    /// validation constraints are violated.
+    pub fn with_id(
+        id: AssetId,
+        organization_id: OrganizationId,
+        name: impl Into<String>,
+        asset_type: AssetType,
+        target_address: impl Into<String>,
+    ) -> Result<Self, DomainError> {
+        let mut asset = Self::new(organization_id, name, asset_type, target_address)?;
+        asset.id = id;
+        Ok(asset)
+    }
 }
 
 #[cfg(test)]
@@ -160,6 +177,22 @@ mod tests {
         assert_eq!(asset.environment, Environment::Production);
         assert_eq!(asset.criticality, Criticality::Medium);
         assert!(asset.is_active);
+    }
+
+    #[test]
+    fn test_asset_with_deterministic_id() {
+        let org_id = OrganizationId::new();
+        let asset_id = AssetId::from_seed(b"deterministic-host-seed");
+        let asset = Asset::with_id(
+            asset_id,
+            org_id,
+            "Web Server",
+            AssetType::LinuxHost,
+            "10.0.0.1",
+        )
+        .expect("valid asset");
+
+        assert_eq!(asset.id, asset_id);
     }
 
     #[test]
