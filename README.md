@@ -132,6 +132,7 @@ cargo test
 
 - [Architecture Design & Technical Decisions](docs/ARCHITECTURE.md)
 - [Threat Model & Security Boundaries](docs/THREAT-MODEL.md)
+- [PostgreSQL Multi-Tenant Data Model](docs/DATA-MODEL.md)
 - [Landscape Research & Project Positioning](docs/RESEARCH.md)
 - [Milestone Development Roadmap](docs/ROADMAP.md)
 - [Security Policy & Vulnerability Reporting](SECURITY.md)
