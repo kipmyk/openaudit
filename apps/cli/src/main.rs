@@ -11,6 +11,6 @@ fn main() {
 mod tests {
     #[test]
     fn test_cli_entry_point() {
-        assert!(!openaudit_core::version().is_empty());
+        assert_ne!(openaudit_core::version(), "");
     }
 }
