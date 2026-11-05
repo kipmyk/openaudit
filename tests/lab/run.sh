@@ -33,7 +33,7 @@ case "$ID" in
     S15) listen 4 0.0.0.0 6380 redis-server ;;
     S16) chmod 0644 /etc/shadow ;;
     S17) chmod 0666 /etc/passwd ;;
-    S18) echo 'alice ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/90-lab
+    S18) echo 'alice ALL=(ALL) ALL' > /etc/sudoers.d/90-lab
          chmod 0666 /etc/sudoers.d/90-lab ;;
     S19) mkdir -p /etc/cron.d && chmod 0777 /etc/cron.d ;;
     S20) listen 4 127.0.0.1 6379 ;;
