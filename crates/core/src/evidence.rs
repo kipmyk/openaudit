@@ -7,11 +7,11 @@
 //! 2. Regex pattern scrubbing for private keys, tokens, and authorization headers.
 //! 3. Hard size limits (512 KB) preventing denial-of-service from response bombs.
 
-use std::fmt;
-use std::sync::LazyLock;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::LazyLock;
 
 use crate::error::DomainError;
 use crate::id::{EvidenceId, FindingId};
@@ -57,18 +57,14 @@ static REGEX_PRIVATE_KEY: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid regex")
 });
 
-static REGEX_BEARER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(bearer\s+)[A-Za-z0-9\-._~+/]+=*")
-        .expect("valid regex")
-});
+static REGEX_BEARER_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)\b(bearer\s+)[A-Za-z0-9\-._~+/]+=*").expect("valid regex"));
 
-static REGEX_AWS_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("valid regex")
-});
+static REGEX_AWS_KEY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bAKIA[0-9A-Z]{16}\b").expect("valid regex"));
 
-static REGEX_GITHUB_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b").expect("valid regex")
-});
+static REGEX_GITHUB_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b").expect("valid regex"));
 
 static REGEX_KEY_VALUE_SECRET: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\b(password|secret|token|api_key|apikey)\s*[:=]\s*['"]?[^\s';,\r\n]+['"]?"#)
@@ -149,8 +145,9 @@ fn scrub_json_value(value: &mut serde_json::Value) {
         serde_json::Value::Object(map) => {
             for (key, val) in map.iter_mut() {
                 let lower_key = key.to_ascii_lowercase();
-                let is_sensitive_key =
-                    SENSITIVE_KEY_SUBSTRINGS.iter().any(|&s| lower_key.contains(s));
+                let is_sensitive_key = SENSITIVE_KEY_SUBSTRINGS
+                    .iter()
+                    .any(|&s| lower_key.contains(s));
 
                 match val {
                     serde_json::Value::Object(_) | serde_json::Value::Array(_) => {
@@ -265,7 +262,8 @@ mod tests {
 
     #[test]
     fn test_text_redaction_aws_and_github_keys() {
-        let raw = "aws_key=AKIAIOSFODNN7EXAMPLE and gh_pat=ghp_ABC123def456GHI789jkl012MNO345pqr678";
+        let raw =
+            "aws_key=AKIAIOSFODNN7EXAMPLE and gh_pat=ghp_ABC123def456GHI789jkl012MNO345pqr678";
         let payload = EvidencePayload::from_text(raw).expect("valid payload");
         let text = payload.data().as_str().expect("is string");
         assert!(!text.contains("AKIAIOSFODNN7EXAMPLE"));
