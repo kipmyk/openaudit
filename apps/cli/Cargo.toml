@@ -1,0 +1,18 @@
+[package]
+name = "openaudit-cli"
+description = "Operator CLI for standalone local host audits and OpenAudit server interaction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openaudit-core = { workspace = true }
+openaudit-engine = { workspace = true }
