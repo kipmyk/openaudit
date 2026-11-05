@@ -17,12 +17,23 @@ MaxAuthTries 4
 EOF
 chmod 0644 /etc/ssh/sshd_config
 
-# --- Critical file permissions ---
+# --- Critical file permissions and account state ---
 chmod 0644 /etc/passwd
 chmod 0644 /etc/group
 chown root:shadow /etc/shadow
 chmod 0640 /etc/shadow
 chmod 0440 /etc/sudoers
+
+gpasswd -d ubuntu sudo 2>/dev/null || true
+gpasswd -d alice sudo 2>/dev/null || true
+gpasswd -d bob sudo 2>/dev/null || true
+chsh -s /usr/sbin/nologin www-data 2>/dev/null || true
+
+# --- Kernel hardening baseline ---
+mkdir -p /tmp/proc-fake
+echo 0 > /tmp/proc-fake/zero && mount --bind /tmp/proc-fake/zero /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+echo 1 > /tmp/proc-fake/one && mount --bind /tmp/proc-fake/one /proc/sys/kernel/dmesg_restrict 2>/dev/null || true
+echo 2 > /tmp/proc-fake/two && mount --bind /tmp/proc-fake/two /proc/sys/kernel/randomize_va_space 2>/dev/null || true
 
 # --- Firewall: ufw removed from PATH unless scenario keeps it; nftables active ---
 if [ "${KEEP_UFW:-0}" != "1" ]; then
