@@ -526,6 +526,7 @@ mod tests {
                     },
                 ],
                 empty_password_accounts: Vec::new(),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -600,6 +601,7 @@ mod tests {
             users: Some(UsersInfo {
                 accounts: Vec::new(),
                 empty_password_accounts: vec!["alice".into()],
+                ..Default::default()
             }),
             ..Default::default()
         };
