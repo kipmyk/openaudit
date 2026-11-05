@@ -107,6 +107,7 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
             firewall: firewall_info,
             file_permissions,
             current_privilege,
+            ..Default::default()
         };
 
         // 2. Synthesize Asset representation
