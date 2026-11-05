@@ -132,6 +132,57 @@ flowchart TD
   - All SQL queries require tenant scoping in `WHERE` clauses.
   - Defense-in-depth: PostgreSQL Row-Level Security (RLS) can be enforced at the connection level.
 
+### AC8: Unauthorized Target Asset Scanning
+- **Scenario:** A tenant attempts to use OpenAudit's agentless scanner to conduct aggressive reconnaissance against unowned third-party infrastructure.
+- **Mitigation:**
+  - Asset registration requires explicit domain ownership verification (e.g., DNS TXT token challenge or HTTP verification file) before active network scanning is unlocked.
+  - Strict audit logging records who authorized the asset, when it was verified, and all scanning timestamps.
+  - Rate limiting caps the frequency and concurrency of scans targeting any single domain or IP address.
+
+### AC9: Malicious Scanning Rules & Parameter Injection
+- **Scenario:** An attacker modifies declarative YAML rule definitions or injects shell metacharacters into check parameters to achieve arbitrary code execution.
+- **Mitigation:**
+  - Rules are declarative and statically validated against a strict schema; dynamic script execution (e.g. bash or python evaluation) is forbidden.
+  - Check runners use structured, typed Rust APIs instead of string-interpolated shell command strings.
+  - Rule files are cryptographically checksummed and bundled into the binary or loaded only from tamper-protected filesystem directories owned by root.
+
+### AC10: Database Compromise & SQL Injection
+- **Scenario:** An adversary exploits an API input field to execute arbitrary SQL commands against PostgreSQL.
+- **Mitigation:**
+  - Exclusive use of SQLx compiled, parameterized queries; string concatenation of SQL statements is forbidden.
+  - Application database user runs with least-privilege permissions (no `SUPERUSER` privileges, cannot alter schema or execute external server extensions).
+  - PostgreSQL connection uses TLS with certificate verification.
+
+### AC11: Worker Exhaustion & Job Queue Flooding
+- **Scenario:** An attacker floods the system with thousands of scan jobs to starve the worker queue and deny service to legitimate audits.
+- **Mitigation:**
+  - Per-organization rate limits and concurrent scan quotas enforced at the API boundary before jobs are enqueued.
+  - Priority-based job scheduling (`ORDER BY priority DESC, scheduled_at ASC`) ensuring operational jobs preempt bulk historical audits.
+  - Worker timeout enforcement: jobs exceeding their maximum wall-clock runtime are automatically marked failed and killed.
+
+### AC12: Supply Chain & Dependency Compromise
+- **Scenario:** A compromised or malicious transitive crate is introduced into the Rust workspace.
+- **Mitigation:**
+  - Zero unnecessary third-party dependencies; all crates are reviewed for maintenance status and security track record.
+  - Workspace lints forbid `unsafe_code` across all crates (`unsafe_code = "forbid"`).
+  - Automated CI dependency audits with `cargo audit` in continuous integration to catch known vulnerability advisories immediately.
+  - Pinned dependencies via tracked `Cargo.lock`.
+
+### AC13: Control-Plane Compromise & Administrative Takeover
+- **Scenario:** An attacker compromises the Axum server process or steals administrative API credentials.
+- **Mitigation:**
+  - Server process runs in an unprivileged container with a read-only root filesystem and dropped capabilities.
+  - Strong Argon2id password hashing with modern salt generation and memory parameters.
+  - Mandatory session revocation endpoints allowing administrators to invalidate all issued tokens instantly.
+  - Blast radius containment: agents only poll outbound and cannot be commanded to execute arbitrary code even if the server is compromised.
+
+### AC14: Compromised Agent Blast Radius & Rogue Report Poisoning
+- **Scenario:** A monitored host is breached, and the attacker uses the installed agent's credentials to send fabricated reports or pivot.
+- **Mitigation:**
+  - The agent holds only a scoped, revocable bearer token with permissions limited strictly to `POST /api/v1/agent/reports` and `POST /api/v1/agent/heartbeat`.
+  - The agent has zero read access to other assets, organizations, or control-plane settings.
+  - Immediate agent revocation in the control plane invalidates the token, dropping all subsequent requests.
+
 ---
 
 ## 5. Residual Risks & Operational Assumptions
