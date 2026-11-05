@@ -48,6 +48,47 @@ impl FilePermissionInfo {
             }
         }
 
+        // Extended audit: inspect sudoers drop-in directory and cron task locations
+        let sensitive_dirs = [
+            "/etc/sudoers.d",
+            "/etc/cron.d",
+            "/etc/cron.daily",
+            "/etc/cron.hourly",
+            "/etc/cron.weekly",
+            "/etc/cron.monthly",
+        ];
+
+        for dir in sensitive_dirs {
+            if fs.exists(dir) {
+                let dir_mode = fs.file_mode(dir).unwrap_or(0);
+                results.push(Self {
+                    path: dir.to_string(),
+                    exists: true,
+                    mode: dir_mode,
+                    is_world_writable: (dir_mode & 0o002) != 0,
+                    is_world_readable: (dir_mode & 0o004) != 0,
+                });
+
+                if let Ok(entries) = fs.read_dir(dir) {
+                    for file_path in entries {
+                        if let Some(filename) = file_path.rsplit('/').next() {
+                            if filename.starts_with('.') || filename.ends_with('~') {
+                                continue;
+                            }
+                        }
+                        let mode = fs.file_mode(&file_path).unwrap_or(0);
+                        results.push(Self {
+                            path: file_path,
+                            exists: true,
+                            mode,
+                            is_world_writable: (mode & 0o002) != 0,
+                            is_world_readable: (mode & 0o004) != 0,
+                        });
+                    }
+                }
+            }
+        }
+
         Ok(results)
     }
 }
@@ -79,6 +120,17 @@ mod tests {
                     "not found",
                 )))
             }
+        }
+
+        fn read_dir(&self, _path: &str) -> Result<Vec<String>, EngineError> {
+            Ok(Vec::new())
+        }
+
+        fn read_link(&self, _path: &str) -> Result<String, EngineError> {
+            Err(EngineError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            )))
         }
     }
 
