@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/engine",
+    "apps/server",
+    "apps/cli",
+    "apps/agent",
+]
+
+[workspace.package]
+version = "0.1.0-alpha.0"
+edition = "2021"
+rust-version = "1.80.0"
+authors = ["OpenAudit Contributors"]
+license = "Apache-2.0"
+repository = "https://github.com/kipmyk/openaudit"
+homepage = "https://github.com/kipmyk/openaudit"
+readme = "README.md"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[workspace.dependencies]
+openaudit-core = { path = "crates/core" }
+openaudit-engine = { path = "crates/engine" }
