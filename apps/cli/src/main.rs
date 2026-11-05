@@ -50,7 +50,7 @@ fn print_version() {
 }
 
 fn run_audit(config: &CliConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let org_id = OrganizationId::new();
+    let org_id = OrganizationId::from_seed(b"openaudit:local:default-org");
     let engine = AuditEngine::default();
     let report = engine.run_local_audit(org_id)?;
 
