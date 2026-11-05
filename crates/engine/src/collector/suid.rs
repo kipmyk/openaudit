@@ -29,6 +29,7 @@ pub struct SuidBinaryInfo {
 }
 
 /// SUID/SGID collector scanning known directories.
+#[derive(Debug, Default, Clone, Copy)]
 pub struct SuidBinaryCollector;
 
 impl SuidBinaryCollector {
