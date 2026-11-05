@@ -7,11 +7,14 @@ use openaudit_core::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::collector::env::EnvInfo;
 use crate::collector::firewall::FirewallInfo;
 use crate::collector::os::OsInfo;
 use crate::collector::permissions::FilePermissionInfo;
-use crate::collector::ports::ListeningPort;
+use crate::collector::ports::{ListeningPort, ListeningUdpPort};
 use crate::collector::ssh::SshConfig;
+use crate::collector::suid::SuidBinaryCollector;
+use crate::collector::sysctl::SysctlInfo;
 use crate::collector::users::UsersInfo;
 use crate::collector::{
     CommandRunner, FileSystem, HostInspectionContext, PrivilegeLevel, RealCommandRunner,
@@ -97,6 +100,10 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
         let listening_ports = ListeningPort::collect(&self.fs).unwrap_or_default();
         let firewall_info = Some(FirewallInfo::collect(&self.runner));
         let file_permissions = FilePermissionInfo::collect_critical(&self.fs).unwrap_or_default();
+        let udp_ports = ListeningUdpPort::collect(&self.fs).unwrap_or_default();
+        let suid_binaries = SuidBinaryCollector::collect(&self.fs);
+        let sysctl = Some(SysctlInfo::collect(&self.fs));
+        let path_entries = EnvInfo::collect(&self.fs).path_entries;
         let current_privilege = PrivilegeLevel::current();
 
         let context = HostInspectionContext {
@@ -106,8 +113,11 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
             listening_ports,
             firewall: firewall_info,
             file_permissions,
+            udp_ports,
+            suid_binaries,
+            sysctl,
+            path_entries,
             current_privilege,
-            ..Default::default()
         };
 
         // 2. Synthesize Asset representation
