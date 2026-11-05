@@ -1,0 +1,31 @@
+{
+  "description": "Ground truth for OpenAudit Ubuntu 24.04 detection lab. 'expected' lists findings a correct auditor SHOULD report. 'cause' explains why the current engine may miss or over-report: 'catalog-gap' = no rule covers it yet; 'engine-defect' = a rule exists but logic is wrong; 'control' = negative test.",
+  "scenarios": {
+    "S00":  {"desc": "Hardened baseline", "kind": "control", "expected": []},
+    "S00b": {"desc": "Hardened baseline (repeat, determinism)", "kind": "control", "expected": []},
+    "S01":  {"desc": "PermitRootLogin yes", "kind": "misconfig", "expected": ["linux.ssh.permit-root-login"]},
+    "S02":  {"desc": "PasswordAuthentication yes (explicit)", "kind": "misconfig", "expected": ["linux.ssh.password-authentication"]},
+    "S03":  {"desc": "PasswordAuthentication absent (OpenSSH default = yes)", "kind": "misconfig", "expected": ["linux.ssh.password-authentication"], "cause": "engine-defect: implicit OpenSSH defaults not modelled"},
+    "S04":  {"desc": "PermitRootLogin yes via sshd_config.d drop-in (Include)", "kind": "misconfig", "expected": ["linux.ssh.permit-root-login"], "cause": "engine-defect: Include directives not followed"},
+    "S05":  {"desc": "Duplicate directive, first is 'yes' (sshd first-match wins => yes)", "kind": "misconfig", "expected": ["linux.ssh.permit-root-login"], "cause": "engine-defect: last-match parsing instead of sshd first-match"},
+    "S06":  {"desc": "Duplicate directive, first is 'no' (effective no)", "kind": "control", "expected": [], "cause": "engine-defect: last-match parsing would over-report"},
+    "S07":  {"desc": "Extra UID 0 account 'toor'", "kind": "misconfig", "expected": ["linux.users.duplicate-root-uid"]},
+    "S08":  {"desc": "Account with empty password hash in /etc/shadow", "kind": "misconfig", "expected": ["linux.users.empty-password"], "cause": "catalog-gap: /etc/shadow not evaluated"},
+    "S09":  {"desc": "No firewall rules at all (empty nftables ruleset)", "kind": "misconfig", "expected": ["linux.firewall.inactive"]},
+    "S10":  {"desc": "ufw installed but inactive; nftables actively filtering", "kind": "control", "expected": [], "cause": "engine-defect: ufw result short-circuits nftables check"},
+    "S11":  {"desc": "Unprivileged execution, nftables active (firewall state unreadable)", "kind": "control", "expected": [], "cause": "engine-defect: unreadable firewall state reported as inactive"},
+    "S12":  {"desc": "Redis port 6379 on 0.0.0.0", "kind": "misconfig", "expected": ["linux.ports.database-publicly-exposed"]},
+    "S13":  {"desc": "MariaDB port 3306 on [::] (IPv6 wildcard)", "kind": "misconfig", "expected": ["linux.ports.database-publicly-exposed"]},
+    "S14":  {"desc": "PostgreSQL 5432 and MongoDB 27017 both on 0.0.0.0", "kind": "misconfig", "expected": ["linux.ports.database-publicly-exposed", "linux.ports.database-publicly-exposed"], "cause": "engine-defect: rule returns only first exposure"},
+    "S15":  {"desc": "redis-server process on non-standard port 6380 on 0.0.0.0", "kind": "misconfig", "expected": ["linux.ports.database-publicly-exposed"], "cause": "catalog-gap: port-number-only service identification"},
+    "S16":  {"desc": "/etc/shadow mode 0644 (world-readable)", "kind": "misconfig", "expected": ["linux.fs.sensitive-file-permissions"]},
+    "S17":  {"desc": "/etc/passwd mode 0666 (world-writable)", "kind": "misconfig", "expected": ["linux.fs.sensitive-file-permissions"]},
+    "S18":  {"desc": "/etc/sudoers.d/90-lab mode 0666 (world-writable sudo drop-in)", "kind": "misconfig", "expected": ["linux.fs.sensitive-file-permissions"], "cause": "catalog-gap: sudoers.d not inspected"},
+    "S19":  {"desc": "/etc/cron.d mode 0777 (world-writable directory)", "kind": "misconfig", "expected": ["linux.fs.sensitive-file-permissions"], "cause": "catalog-gap: directories not inspected"},
+    "S20":  {"desc": "Redis port 6379 on 127.0.0.1 only", "kind": "control", "expected": []},
+    "S21":  {"desc": "/etc/sudoers mode 0666", "kind": "misconfig", "expected": ["linux.fs.sensitive-file-permissions"]},
+    "S22":  {"desc": "/etc/shadow 0644 and /etc/passwd 0666 together", "kind": "misconfig", "expected": ["linux.fs.sensitive-file-permissions", "linux.fs.sensitive-file-permissions"], "cause": "engine-defect: rule returns only first offending file"},
+    "S23":  {"desc": "/etc/ssh/sshd_config mode 0666", "kind": "misconfig", "expected": ["linux.fs.sensitive-file-permissions"]}
+  }
+}
+
