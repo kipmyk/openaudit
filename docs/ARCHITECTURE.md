@@ -198,9 +198,22 @@ RETURNING scan_jobs.*;
 - **Strict Data Consistency:** Jobs and scan records live within the same transactional database. If a database transaction rolls back, job state consistency is preserved.
 - **Low Memory Footprint:** PostgreSQL handles connections and indexing efficiently within standard memory constraints.
 
+For the comprehensive relational entity design, Row-Level Security (RLS) policies, finding deduplication state machine, and evidence retention rules, see [DATA-MODEL.md](DATA-MODEL.md).
+
 ---
 
-## 6. Deployment Architecture
+## 6. Observability & Structured Logging
+
+OpenAudit standardizes on the `tracing` ecosystem across all crates and binaries:
+
+- **Structured Key-Value Spans:** Every scan execution, API request, and agent polling cycle is bound to a structured trace span carrying `organization_id`, `asset_id`, and `scan_id`.
+- **Environment Filter:** Configured via `RUST_LOG` with sensible defaults (e.g., `info,openaudit=debug`).
+- **Log Formatting:** Standard human-readable formatting in development CLI contexts and machine-readable JSON in production server/container deployments.
+- **No Logged Secrets:** Explicit filter sanitizers prevent logging bearer tokens, private keys, or raw unsanitized evidence payloads.
+
+---
+
+## 7. Deployment Architecture
 
 For self-hosted production deployments, OpenAudit is packaged as a lightweight Docker Compose deployment:
 
