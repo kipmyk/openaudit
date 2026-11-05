@@ -64,6 +64,18 @@ pub trait FileSystem: Send + Sync {
     /// # Errors
     /// Returns an [`EngineError::Io`] if metadata cannot be fetched.
     fn file_mode(&self, path: &str) -> Result<u32, EngineError>;
+
+    /// Lists directory entries in sorted lexicographical order.
+    ///
+    /// # Errors
+    /// Returns an [`EngineError::Io`] if the directory cannot be read.
+    fn read_dir(&self, path: &str) -> Result<Vec<String>, EngineError>;
+
+    /// Reads target path of a symbolic link.
+    ///
+    /// # Errors
+    /// Returns an [`EngineError::Io`] if reading the symlink fails.
+    fn read_link(&self, path: &str) -> Result<String, EngineError>;
 }
 
 /// Real operating system filesystem reader.
@@ -108,6 +120,27 @@ impl FileSystem for RealFileSystem {
             let _ = path;
             Ok(0o644)
         }
+    }
+
+    fn read_dir(&self, path: &str) -> Result<Vec<String>, EngineError> {
+        let entries = std::fs::read_dir(path)?;
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if let Some(p) = entry.path().to_str() {
+                paths.push(p.to_string());
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+
+    fn read_link(&self, path: &str) -> Result<String, EngineError> {
+        let target = std::fs::read_link(path)?;
+        target
+            .to_str()
+            .map(std::string::ToString::to_string)
+            .ok_or_else(|| EngineError::Parse(format!("non-utf8 symlink target at {path}")))
     }
 }
 
