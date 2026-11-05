@@ -1,8 +1,8 @@
 //! Scan execution lifecycle, state transitions, and job queue models.
 
-use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::error::DomainError;
 use crate::id::{AssetId, OrganizationId, ScanId, ScanJobId};
