@@ -67,17 +67,37 @@ static REGEX_GITHUB_TOKEN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\bgh[pousr]_[A-Za-z0-9_]{36,}\b").expect("valid regex"));
 
 static REGEX_KEY_VALUE_SECRET: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\b(password|secret|token|api_key|apikey)\s*[:=]\s*['"]?[^\s';,\r\n]+['"]?"#)
-        .expect("valid regex")
+    Regex::new(
+        r#"(?i)\b([a-z0-9_\-]*(?:password|passwd|secret|token|api_key|apikey|private_key)[a-z0-9_\-]*)\s*[:=]\s*['"]?[^\s';,\r\n]+['"]?"#,
+    )
+    .expect("valid regex")
 });
 
 /// A guaranteed sanitized and size-bounded evidence payload.
 ///
-/// Private inner state ensures unredacted content cannot be instantiated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// # Security Invariant
+/// Both programmatic constructors and Serde deserialization route through
+/// recursive redaction and size verification. Unredacted payloads cannot be
+/// instantiated or deserialized.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct EvidencePayload {
     data: serde_json::Value,
     size_bytes: usize,
+}
+
+impl<'de> Deserialize<'de> for EvidencePayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawEvidencePayload {
+            data: serde_json::Value,
+        }
+
+        let raw = RawEvidencePayload::deserialize(deserializer)?;
+        Self::from_json(raw.data).map_err(serde::de::Error::custom)
+    }
 }
 
 impl EvidencePayload {
@@ -119,7 +139,11 @@ impl EvidencePayload {
             });
         }
 
-        let size_bytes = serialized.len();
+        let size_bytes = match &value {
+            serde_json::Value::String(s) => s.len(),
+            _ => serialized.len(),
+        };
+
         Ok(Self {
             data: value,
             size_bytes,
@@ -338,5 +362,73 @@ mod tests {
         let evidence = Evidence::new(FindingId::new(), EvidenceType::ConfigExcerpt, payload);
         assert!(evidence.is_redacted);
         assert_eq!(evidence.evidence_type, EvidenceType::ConfigExcerpt);
+    }
+
+    #[test]
+    fn test_adversarial_deserialization_bypasses_prevented() {
+        // Adversary crafts a serialized JSON claiming to be a valid EvidencePayload,
+        // attempting to inject unredacted secrets directly into memory.
+        let malicious_json = r#"{
+            "data": {
+                "admin_password": "PlaintextAttackerPassword123!",
+                "raw_key": "-----BEGIN EC PRIVATE KEY-----\nMIGkAgEBBDDmockkey\n-----END EC PRIVATE KEY-----",
+                "nested": {
+                    "API_KEY": "secret-unredacted-api-key"
+                }
+            },
+            "size_bytes": 100
+        }"#;
+
+        let deserialized: EvidencePayload =
+            serde_json::from_str(malicious_json).expect("deserialization should succeed");
+
+        let data = deserialized.data();
+        // Invariant check: Deserialization routed through scrub_json_value
+        assert_eq!(data["admin_password"], "[REDACTED]");
+        assert_eq!(data["raw_key"], "[REDACTED PRIVATE KEY]");
+        assert_eq!(data["nested"]["API_KEY"], "[REDACTED]");
+    }
+
+    #[test]
+    fn test_adversarial_oversized_payload_deserialization_rejected() {
+        let oversized_data = "a".repeat(MAX_EVIDENCE_SIZE_BYTES + 10);
+        let malicious_json = format!(r#"{{"data": "{oversized_data}", "size_bytes": 100}}"#);
+
+        let result: Result<EvidencePayload, _> = serde_json::from_str(&malicious_json);
+        assert!(
+            result.is_err(),
+            "oversized payload must fail deserialization"
+        );
+    }
+
+    #[test]
+    fn test_unusual_whitespace_and_mixed_case_redaction() {
+        let raw = "pAsSwOrD  \t=\t  'MixedCaseSecret123!'\nSECRET_TOKEN:   \"another_secret\"";
+        let payload = EvidencePayload::from_text(raw).expect("valid payload");
+        let text = payload.data().as_str().expect("is string");
+        assert!(!text.contains("MixedCaseSecret123!"));
+        assert!(!text.contains("another_secret"));
+        assert!(text.contains("pAsSwOrD=[REDACTED]"));
+    }
+
+    #[test]
+    fn test_false_positive_preservation() {
+        // Verify non-credential configuration fields are NOT accidentally destroyed
+        let raw_json = serde_json::json!({
+            "hostname": "bastion-01",
+            "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...",
+            "listen_port": 22,
+            "max_auth_tries": 3
+        });
+
+        let payload = EvidencePayload::from_json(raw_json).expect("valid payload");
+        let data = payload.data();
+        assert_eq!(data["hostname"], "bastion-01");
+        assert_eq!(
+            data["public_key"],
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI..."
+        );
+        assert_eq!(data["listen_port"], 22);
+        assert_eq!(data["max_auth_tries"], 3);
     }
 }
