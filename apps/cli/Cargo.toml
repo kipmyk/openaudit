@@ -16,3 +16,4 @@ workspace = true
 [dependencies]
 openaudit-core = { workspace = true }
 openaudit-engine = { workspace = true }
+serde_json = { workspace = true }
