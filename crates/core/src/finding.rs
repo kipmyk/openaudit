@@ -1,10 +1,10 @@
 //! Security finding models and deduplication fingerprinting.
 
-use std::fmt;
-use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fmt;
+use std::str::FromStr;
 
 use crate::error::DomainError;
 use crate::id::{AssetId, FindingId, OrganizationId};
@@ -222,8 +222,11 @@ mod tests {
         assert_eq!(fp1.as_str().len(), 64);
 
         // Different asset produces different fingerprint
-        let fp3 =
-            Fingerprint::compute(AssetId::new(), "ssh-permit-root-login", "/etc/ssh/sshd_config");
+        let fp3 = Fingerprint::compute(
+            AssetId::new(),
+            "ssh-permit-root-login",
+            "/etc/ssh/sshd_config",
+        );
         assert_ne!(fp1, fp3);
     }
 
