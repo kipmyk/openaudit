@@ -21,10 +21,11 @@ This document outlines the phased development roadmap for OpenAudit. Milestones 
 - **Scope:**
   - Complete architectural definitions (`ARCHITECTURE.md`).
   - Comprehensive threat model and abuse cases (`THREAT-MODEL.md`).
+  - PostgreSQL multi-tenant schema and data model architecture (`DATA-MODEL.md`).
   - Tool landscape research and standards alignment (`RESEARCH.md`).
   - Contribution guidelines, security disclosure policy, and Apache 2.0 licensing.
   - Rust workspace layout with pinned toolchain (`rust-toolchain.toml`).
-  - GitHub Actions CI workflow (formatting, Clippy, tests).
+  - GitHub Actions CI workflow (formatting, Clippy, tests, doc generation, cargo-audit).
 - **Acceptance Criteria:** A clean, documented repository that any Rust engineer can clone, understand, and build with `cargo check` and `cargo test`. Zero compiler or linter warnings.
 - **Dependencies:** None.
 
