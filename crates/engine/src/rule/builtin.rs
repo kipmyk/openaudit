@@ -1,5 +1,6 @@
 //! Built-in security rules for local Linux host auditing.
 
+use crate::collector::firewall::FirewallStatus;
 use crate::collector::{HostInspectionContext, PrivilegeLevel};
 use crate::rule::{Rule, RuleFinding};
 use openaudit_core::{EvidenceType, Severity};
@@ -33,12 +34,16 @@ impl Rule for SshPermitRootLoginRule {
         PrivilegeLevel::Unprivileged
     }
 
-    fn evaluate(&self, context: &HostInspectionContext) -> Option<RuleFinding> {
-        let ssh = context.ssh.as_ref()?;
-        let val = ssh.permit_root_login.as_deref()?;
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(ssh) = context.ssh.as_ref() else {
+            return Vec::new();
+        };
+        let Some(val) = ssh.permit_root_login.as_deref() else {
+            return Vec::new();
+        };
 
         if val == "yes" {
-            Some(RuleFinding {
+            vec![RuleFinding {
                 rule_id: self.id(),
                 target: "/etc/ssh/sshd_config:PermitRootLogin".into(),
                 title: self.title().into(),
@@ -47,9 +52,9 @@ impl Rule for SshPermitRootLoginRule {
                 severity: self.severity(),
                 evidence_text: format!("PermitRootLogin {val}"),
                 evidence_type: EvidenceType::ConfigExcerpt,
-            })
+            }]
         } else {
-            None
+            Vec::new()
         }
     }
 }
@@ -83,23 +88,33 @@ impl Rule for SshPasswordAuthRule {
         PrivilegeLevel::Unprivileged
     }
 
-    fn evaluate(&self, context: &HostInspectionContext) -> Option<RuleFinding> {
-        let ssh = context.ssh.as_ref()?;
-        let pw_auth = ssh.password_authentication?;
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(ssh) = context.ssh.as_ref() else {
+            return Vec::new();
+        };
+
+        // OpenSSH defaults PasswordAuthentication to yes when absent from configuration
+        let pw_auth = ssh.password_authentication.unwrap_or(true);
 
         if pw_auth {
-            Some(RuleFinding {
+            let evidence = if ssh.password_authentication == Some(true) {
+                "PasswordAuthentication yes".into()
+            } else {
+                "PasswordAuthentication omitted (OpenSSH upstream default: yes)".into()
+            };
+
+            vec![RuleFinding {
                 rule_id: self.id(),
                 target: "/etc/ssh/sshd_config:PasswordAuthentication".into(),
                 title: self.title().into(),
                 description: self.description().into(),
                 remediation: self.remediation().into(),
                 severity: self.severity(),
-                evidence_text: "PasswordAuthentication yes".into(),
+                evidence_text: evidence,
                 evidence_type: EvidenceType::ConfigExcerpt,
-            })
+            }]
         } else {
-            None
+            Vec::new()
         }
     }
 }
@@ -133,30 +148,32 @@ impl Rule for DuplicateRootUidRule {
         PrivilegeLevel::Unprivileged
     }
 
-    fn evaluate(&self, context: &HostInspectionContext) -> Option<RuleFinding> {
-        let users = context.users.as_ref()?;
-        let bad_accounts: Vec<_> = users
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(users) = context.users.as_ref() else {
+            return Vec::new();
+        };
+
+        users
             .root_uid_accounts()
             .into_iter()
             .filter(|u| u.username != "root")
-            .collect();
-
-        bad_accounts.first().map(|bad| RuleFinding {
-            rule_id: self.id(),
-            target: format!("/etc/passwd:{}", bad.username),
-            title: self.title().into(),
-            description: format!(
-                "Account '{}' possesses UID 0 giving it full root capabilities.",
-                bad.username
-            ),
-            remediation: self.remediation().into(),
-            severity: self.severity(),
-            evidence_text: format!(
-                "{}:x:0:{}:{}:{}:{}",
-                bad.username, bad.gid, bad.comment, bad.home, bad.shell
-            ),
-            evidence_type: EvidenceType::ConfigExcerpt,
-        })
+            .map(|bad| RuleFinding {
+                rule_id: self.id(),
+                target: format!("/etc/passwd:{}", bad.username),
+                title: self.title().into(),
+                description: format!(
+                    "Account '{}' possesses UID 0 giving it full root capabilities.",
+                    bad.username
+                ),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: format!(
+                    "{}:x:0:{}:{}:{}:{}",
+                    bad.username, bad.gid, bad.comment, bad.home, bad.shell
+                ),
+                evidence_type: EvidenceType::ConfigExcerpt,
+            })
+            .collect()
     }
 }
 
@@ -189,7 +206,7 @@ impl Rule for ExposedDatabasePortRule {
         PrivilegeLevel::Unprivileged
     }
 
-    fn evaluate(&self, context: &HostInspectionContext) -> Option<RuleFinding> {
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let known_db_ports = [
             (3306, "MySQL"),
             (5432, "PostgreSQL"),
@@ -197,32 +214,68 @@ impl Rule for ExposedDatabasePortRule {
             (27017, "MongoDB"),
         ];
 
+        let known_db_processes = [
+            ("redis-server", "Redis"),
+            ("mysqld", "MySQL"),
+            ("mariadbd", "MariaDB"),
+            ("postgres", "PostgreSQL"),
+            ("mongod", "MongoDB"),
+        ];
+
+        let mut findings = Vec::new();
         for port_info in &context.listening_ports {
             if port_info.is_wildcard {
+                let mut matched_db = None;
+
                 for (db_port, db_name) in known_db_ports {
                     if port_info.port == db_port {
-                        return Some(RuleFinding {
-                            rule_id: self.id(),
-                            target: format!("{}:{}", port_info.ip, port_info.port),
-                            title: format!("{db_name} Database Exposed on Wildcard Interface"),
-                            description: format!(
-                                "{db_name} (port {db_port}) is bound to wildcard address '{}'.",
-                                port_info.ip
-                            ),
-                            remediation: self.remediation().into(),
-                            severity: self.severity(),
-                            evidence_text: format!(
-                                "{} {}:{} LISTEN (inode: {})",
-                                port_info.protocol, port_info.ip, port_info.port, port_info.inode
-                            ),
-                            evidence_type: EvidenceType::SocketState,
-                        });
+                        matched_db = Some(db_name);
+                        break;
                     }
+                }
+
+                if matched_db.is_none() {
+                    if let Some(ref proc) = port_info.process_name {
+                        for (proc_name, db_name) in known_db_processes {
+                            if proc == proc_name {
+                                matched_db = Some(db_name);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(db_name) = matched_db {
+                    let proc_desc = port_info
+                        .process_name
+                        .as_deref()
+                        .map_or(String::new(), |p| format!(" (process '{p}')"));
+
+                    findings.push(RuleFinding {
+                        rule_id: self.id(),
+                        target: format!("{}:{}", port_info.ip, port_info.port),
+                        title: format!("{db_name} Database Exposed on Wildcard Interface"),
+                        description: format!(
+                            "{db_name}{proc_desc} (port {}) is bound to wildcard address '{}'.",
+                            port_info.port, port_info.ip
+                        ),
+                        remediation: self.remediation().into(),
+                        severity: self.severity(),
+                        evidence_text: format!(
+                            "{} {}:{} LISTEN (inode: {}){}",
+                            port_info.protocol,
+                            port_info.ip,
+                            port_info.port,
+                            port_info.inode,
+                            proc_desc
+                        ),
+                        evidence_type: EvidenceType::SocketState,
+                    });
                 }
             }
         }
 
-        None
+        findings
     }
 }
 
@@ -255,12 +308,13 @@ impl Rule for FirewallInactiveRule {
         PrivilegeLevel::Unprivileged
     }
 
-    fn evaluate(&self, context: &HostInspectionContext) -> Option<RuleFinding> {
-        let fw = context.firewall.as_ref()?;
-        if fw.is_active {
-            None
-        } else {
-            Some(RuleFinding {
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(fw) = context.firewall.as_ref() else {
+            return Vec::new();
+        };
+
+        if fw.status == FirewallStatus::Inactive {
+            vec![RuleFinding {
                 rule_id: self.id(),
                 target: "host:firewall".into(),
                 title: self.title().into(),
@@ -269,7 +323,9 @@ impl Rule for FirewallInactiveRule {
                 severity: self.severity(),
                 evidence_text: fw.details.clone(),
                 evidence_type: EvidenceType::SystemState,
-            })
+            }]
+        } else {
+            Vec::new()
         }
     }
 }
@@ -303,10 +359,12 @@ impl Rule for SensitiveFilePermissionsRule {
         PrivilegeLevel::Unprivileged
     }
 
-    fn evaluate(&self, context: &HostInspectionContext) -> Option<RuleFinding> {
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let mut findings = Vec::new();
+
         for file in &context.file_permissions {
             if file.is_world_writable {
-                return Some(RuleFinding {
+                findings.push(RuleFinding {
                     rule_id: self.id(),
                     target: file.path.clone(),
                     title: format!("Critical File '{}' Is World-Writable", file.path),
@@ -323,7 +381,7 @@ impl Rule for SensitiveFilePermissionsRule {
 
             // /etc/shadow should never be world-readable
             if file.path == "/etc/shadow" && file.is_world_readable {
-                return Some(RuleFinding {
+                findings.push(RuleFinding {
                     rule_id: self.id(),
                     target: file.path.clone(),
                     title: "Shadow Password File Is World-Readable".into(),
@@ -336,7 +394,60 @@ impl Rule for SensitiveFilePermissionsRule {
             }
         }
 
-        None
+        findings
+    }
+}
+
+/// Rule detecting accounts with empty password hashes in /etc/shadow.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EmptyPasswordRule;
+
+impl Rule for EmptyPasswordRule {
+    fn id(&self) -> &'static str {
+        "linux.users.empty-password"
+    }
+
+    fn title(&self) -> &'static str {
+        "User Account with Empty Password Hash"
+    }
+
+    fn description(&self) -> &'static str {
+        "An account exists in /etc/shadow with an empty password hash field, permitting password authentication without entering a password."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Critical
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Set a strong password with 'passwd <username>' or disable the account with 'passwd -l <username>'."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::RootRequired
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(users) = context.users.as_ref() else {
+            return Vec::new();
+        };
+
+        users
+            .empty_password_accounts
+            .iter()
+            .map(|username| RuleFinding {
+                rule_id: self.id(),
+                target: format!("/etc/shadow:{username}"),
+                title: format!("Account '{username}' Has No Password Set"),
+                description: format!(
+                    "The password field for account '{username}' in /etc/shadow is empty."
+                ),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: format!("{username}::19000:0:99999:7:::"),
+                evidence_type: EvidenceType::ConfigExcerpt,
+            })
+            .collect()
     }
 }
 
@@ -347,6 +458,7 @@ pub fn default_linux_rules() -> Vec<Box<dyn Rule>> {
         Box::new(SshPermitRootLoginRule),
         Box::new(SshPasswordAuthRule),
         Box::new(DuplicateRootUidRule),
+        Box::new(EmptyPasswordRule),
         Box::new(ExposedDatabasePortRule),
         Box::new(FirewallInactiveRule),
         Box::new(SensitiveFilePermissionsRule),
@@ -356,7 +468,7 @@ pub fn default_linux_rules() -> Vec<Box<dyn Rule>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::collector::firewall::{FirewallInfo, FirewallKind};
+    use crate::collector::firewall::{FirewallInfo, FirewallKind, FirewallStatus};
     use crate::collector::permissions::FilePermissionInfo;
     use crate::collector::ports::ListeningPort;
     use crate::collector::ssh::SshConfig;
@@ -374,7 +486,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(rule.evaluate(&safe_context).is_none());
+        assert!(rule.evaluate(&safe_context).is_empty());
 
         // Dangerous
         let danger_context = HostInspectionContext {
@@ -384,11 +496,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        let finding = rule
-            .evaluate(&danger_context)
-            .expect("should trigger finding");
-        assert_eq!(finding.severity, Severity::High);
-        assert_eq!(finding.rule_id, "linux.ssh.permit-root-login");
+        let findings = rule.evaluate(&danger_context);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+        assert_eq!(findings[0].rule_id, "linux.ssh.permit-root-login");
     }
 
     #[test]
@@ -414,19 +525,19 @@ mod tests {
                         shell: "/bin/bash".into(),
                     },
                 ],
+                empty_password_accounts: Vec::new(),
             }),
             ..Default::default()
         };
 
-        let finding = rule
-            .evaluate(&context)
-            .expect("should catch backdoor UID 0");
-        assert_eq!(finding.severity, Severity::Critical);
-        assert_eq!(finding.target, "/etc/passwd:backdoor");
+        let findings = rule.evaluate(&context);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(findings[0].target, "/etc/passwd:backdoor");
     }
 
     #[test]
-    fn test_exposed_database_port_eval() {
+    fn test_exposed_database_port_multi_finding_eval() {
         let rule = ExposedDatabasePortRule;
         let context = HostInspectionContext {
             listening_ports: vec![
@@ -436,6 +547,7 @@ mod tests {
                     port: 5432,
                     is_wildcard: false,
                     inode: 1234,
+                    process_name: None,
                 },
                 ListeningPort {
                     protocol: "tcp".into(),
@@ -443,16 +555,59 @@ mod tests {
                     port: 6379,
                     is_wildcard: true,
                     inode: 5678,
+                    process_name: None,
+                },
+                ListeningPort {
+                    protocol: "tcp6".into(),
+                    ip: "::".into(),
+                    port: 3306,
+                    is_wildcard: true,
+                    inode: 9101,
+                    process_name: None,
                 },
             ],
             ..Default::default()
         };
 
-        let finding = rule
-            .evaluate(&context)
-            .expect("should flag exposed Redis on 0.0.0.0:6379");
-        assert_eq!(finding.severity, Severity::High);
-        assert!(finding.title.contains("Redis"));
+        let findings = rule.evaluate(&context);
+        assert_eq!(findings.len(), 2, "must report both exposed databases");
+    }
+
+    #[test]
+    fn test_exposed_database_by_process_name_eval() {
+        let rule = ExposedDatabasePortRule;
+        let context = HostInspectionContext {
+            listening_ports: vec![ListeningPort {
+                protocol: "tcp".into(),
+                ip: "0.0.0.0".into(),
+                port: 6380, // non-standard port
+                is_wildcard: true,
+                inode: 9999,
+                process_name: Some("redis-server".into()),
+            }],
+            ..Default::default()
+        };
+
+        let findings = rule.evaluate(&context);
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("Redis"));
+    }
+
+    #[test]
+    fn test_empty_password_eval() {
+        let rule = EmptyPasswordRule;
+        let context = HostInspectionContext {
+            users: Some(UsersInfo {
+                accounts: Vec::new(),
+                empty_password_accounts: vec!["alice".into()],
+            }),
+            ..Default::default()
+        };
+
+        let findings = rule.evaluate(&context);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert_eq!(findings[0].target, "/etc/shadow:alice");
     }
 
     #[test]
@@ -461,35 +616,46 @@ mod tests {
         let context = HostInspectionContext {
             firewall: Some(FirewallInfo {
                 kind: FirewallKind::Ufw,
+                status: FirewallStatus::Inactive,
                 is_active: false,
                 details: "Status: inactive".into(),
             }),
             ..Default::default()
         };
 
-        let finding = rule
-            .evaluate(&context)
-            .expect("should flag inactive firewall");
-        assert_eq!(finding.severity, Severity::High);
+        let findings = rule.evaluate(&context);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
     }
 
     #[test]
-    fn test_sensitive_file_permissions_eval() {
+    fn test_sensitive_file_permissions_multi_finding_eval() {
         let rule = SensitiveFilePermissionsRule;
         let context = HostInspectionContext {
-            file_permissions: vec![FilePermissionInfo {
-                path: "/etc/shadow".into(),
-                exists: true,
-                mode: 0o666,
-                is_world_writable: true,
-                is_world_readable: true,
-            }],
+            file_permissions: vec![
+                FilePermissionInfo {
+                    path: "/etc/shadow".into(),
+                    exists: true,
+                    mode: 0o644,
+                    is_world_writable: false,
+                    is_world_readable: true,
+                },
+                FilePermissionInfo {
+                    path: "/etc/passwd".into(),
+                    exists: true,
+                    mode: 0o666,
+                    is_world_writable: true,
+                    is_world_readable: true,
+                },
+            ],
             ..Default::default()
         };
 
-        let finding = rule
-            .evaluate(&context)
-            .expect("should flag world-writable shadow file");
-        assert_eq!(finding.severity, Severity::Critical);
+        let findings = rule.evaluate(&context);
+        assert_eq!(
+            findings.len(),
+            2,
+            "must report both shadow and passwd violations"
+        );
     }
 }
