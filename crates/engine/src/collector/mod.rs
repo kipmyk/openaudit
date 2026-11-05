@@ -1,10 +1,13 @@
 //! Collectors for harvesting host security posture and configuration state.
 
+pub mod env;
 pub mod firewall;
 pub mod os;
 pub mod permissions;
 pub mod ports;
 pub mod ssh;
+pub mod suid;
+pub mod sysctl;
 pub mod users;
 
 use crate::error::EngineError;
@@ -201,6 +204,14 @@ pub struct HostInspectionContext {
     pub firewall: Option<firewall::FirewallInfo>,
     /// Sensitive file permissions.
     pub file_permissions: Vec<permissions::FilePermissionInfo>,
+    /// Active listening UDP ports.
+    pub udp_ports: Vec<ports::ListeningUdpPort>,
+    /// Detected SUID and SGID executable binaries.
+    pub suid_binaries: Vec<suid::SuidBinaryInfo>,
+    /// Kernel hardening parameters from `/proc/sys/`.
+    pub sysctl: Option<sysctl::SysctlInfo>,
+    /// Inspected directory entries in the process `PATH`.
+    pub path_entries: Vec<env::PathEntry>,
     /// Host execution privilege level at time of audit.
     pub current_privilege: PrivilegeLevel,
 }
