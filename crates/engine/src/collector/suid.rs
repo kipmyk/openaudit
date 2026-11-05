@@ -34,6 +34,7 @@ pub struct SuidBinaryCollector;
 
 impl SuidBinaryCollector {
     /// Scans standard executable directories for SUID or SGID binaries.
+    #[allow(clippy::similar_names)]
     #[must_use]
     pub fn collect<FS: FileSystem>(fs: &FS) -> Vec<SuidBinaryInfo> {
         let mut results = Vec::new();
@@ -79,8 +80,7 @@ mod tests {
         }
         fn file_mode(&self, path: &str) -> Result<u32, EngineError> {
             match path {
-                "/usr/bin/passwd" => Ok(0o4755),
-                "/tmp/setuid-bash" => Ok(0o4755),
+                "/usr/bin/passwd" | "/tmp/setuid-bash" => Ok(0o4755),
                 "/tmp/shadow-reader" => Ok(0o2755),
                 _ => Ok(0o755),
             }
@@ -109,19 +109,14 @@ mod tests {
         let binaries = SuidBinaryCollector::collect(&MockSuidFs);
         assert_eq!(binaries.len(), 3);
 
-        let suids: Vec<_> = binaries
+        assert!(binaries
             .iter()
-            .filter(|b| b.is_suid)
-            .map(|b| b.path.as_str())
-            .collect();
-        assert!(suids.contains(&"/tmp/setuid-bash"));
-        assert!(suids.contains(&"/usr/bin/passwd"));
-
-        let sgids: Vec<_> = binaries
+            .any(|b| b.is_suid && b.path == "/tmp/setuid-bash"));
+        assert!(binaries
             .iter()
-            .filter(|b| b.is_sgid)
-            .map(|b| b.path.as_str())
-            .collect();
-        assert!(sgids.contains(&"/tmp/shadow-reader"));
+            .any(|b| b.is_suid && b.path == "/usr/bin/passwd"));
+        assert!(binaries
+            .iter()
+            .any(|b| b.is_sgid && b.path == "/tmp/shadow-reader"));
     }
 }
