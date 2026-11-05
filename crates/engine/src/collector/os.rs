@@ -17,6 +17,8 @@ pub struct OsInfo {
     pub kernel_release: String,
     /// Host CPU architecture (e.g., "x86_64", "aarch64").
     pub architecture: String,
+    /// Unique machine identifier from /etc/machine-id or dbus, if present.
+    pub machine_id: Option<String>,
 }
 
 impl OsInfo {
@@ -65,6 +67,20 @@ impl OsInfo {
 
         let architecture = std::env::consts::ARCH.to_string();
 
+        let machine_id = if fs.exists("/etc/machine-id") {
+            fs.read_to_string("/etc/machine-id")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        } else if fs.exists("/var/lib/dbus/machine-id") {
+            fs.read_to_string("/var/lib/dbus/machine-id")
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        };
+
         let kernel_release = if fs.exists("/proc/version") {
             fs.read_to_string("/proc/version")
                 .unwrap_or_else(|_| "unknown".to_string())
@@ -83,6 +99,7 @@ impl OsInfo {
             pretty_name,
             kernel_release,
             architecture,
+            machine_id,
         })
     }
 }
@@ -114,6 +131,17 @@ mod tests {
 
         fn file_mode(&self, _path: &str) -> Result<u32, EngineError> {
             Ok(0o644)
+        }
+
+        fn read_dir(&self, _path: &str) -> Result<Vec<String>, EngineError> {
+            Ok(Vec::new())
+        }
+
+        fn read_link(&self, _path: &str) -> Result<String, EngineError> {
+            Err(EngineError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            )))
         }
     }
 
