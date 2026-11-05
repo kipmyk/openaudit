@@ -455,23 +455,763 @@ impl Rule for EmptyPasswordRule {
 #[must_use]
 pub fn default_linux_rules() -> Vec<Box<dyn Rule>> {
     vec![
+        // SSH configuration
         Box::new(SshPermitRootLoginRule),
         Box::new(SshPasswordAuthRule),
+        Box::new(SshX11ForwardingRule),
+        Box::new(SshMaxAuthTriesRule),
+        // Users & authentication
         Box::new(DuplicateRootUidRule),
         Box::new(EmptyPasswordRule),
+        Box::new(ServiceAccountInteractiveShellRule),
+        Box::new(SudoersNopasswdRule),
+        Box::new(SudoGroupMemberRule),
+        // Network exposure
         Box::new(ExposedDatabasePortRule),
+        Box::new(SshWildcardExposureRule),
+        Box::new(DnsPubliclyExposedRule),
+        // Firewall
         Box::new(FirewallInactiveRule),
+        // Filesystem & privileges
         Box::new(SensitiveFilePermissionsRule),
+        Box::new(UnexpectedSuidBinaryRule),
+        Box::new(UnexpectedSgidBinaryRule),
+        Box::new(WritablePathEntryRule),
+        // Kernel hardening
+        Box::new(KernelDmesgUnrestrictedRule),
+        Box::new(KernelIpForwardingRule),
+        Box::new(KernelAslrDisabledRule),
     ]
+}
+
+/// SUID binaries allowed by the default Ubuntu/Debian baseline.
+pub const SUID_ALLOWLIST: &[&str] = &[
+    "/usr/bin/sudo",
+    "/usr/bin/su",
+    "/usr/bin/newgrp",
+    "/usr/bin/chsh",
+    "/usr/bin/chfn",
+    "/usr/bin/passwd",
+    "/usr/bin/gpasswd",
+    "/usr/bin/mount",
+    "/usr/bin/umount",
+    "/bin/mount",
+    "/bin/umount",
+    "/bin/su",
+    "/bin/ping",
+    "/bin/ping6",
+    "/usr/bin/pkexec",
+    "/usr/lib/openssh/ssh-keysign",
+    "/usr/lib/dbus-1.0/dbus-daemon-launch-helper",
+    "/usr/sbin/pam_extraauth",
+];
+
+/// SGID binaries allowed by the default Ubuntu/Debian baseline.
+pub const SGID_ALLOWLIST: &[&str] = &[
+    "/usr/bin/crontab",
+    "/usr/bin/wall",
+    "/usr/bin/bsd-write",
+    "/usr/bin/write",
+    "/usr/bin/expiry",
+    "/usr/bin/chage",
+    "/usr/bin/ssh-agent",
+    "/sbin/unix_chkpwd",
+    "/usr/sbin/unix_chkpwd",
+];
+
+/// Rule flagging X11 forwarding enabled in SSH (`X11Forwarding yes`).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SshX11ForwardingRule;
+
+impl Rule for SshX11ForwardingRule {
+    fn id(&self) -> &'static str {
+        "linux.ssh.x11-forwarding"
+    }
+
+    fn title(&self) -> &'static str {
+        "SSH X11 Forwarding Enabled"
+    }
+
+    fn description(&self) -> &'static str {
+        "X11 protocol forwarding allows remote clients to access graphical display interfaces, potentially allowing session hijacking and local privilege escalation."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Low
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Set 'X11Forwarding no' in /etc/ssh/sshd_config unless explicitly required."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(ssh) = context.ssh.as_ref() else {
+            return Vec::new();
+        };
+
+        if ssh.x11_forwarding == Some(true) {
+            vec![RuleFinding {
+                rule_id: self.id(),
+                target: "/etc/ssh/sshd_config:X11Forwarding".into(),
+                title: self.title().into(),
+                description: self.description().into(),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: "X11Forwarding yes".into(),
+                evidence_type: EvidenceType::ConfigExcerpt,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// Rule flagging high or unconfigured `MaxAuthTries` in SSH configuration.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SshMaxAuthTriesRule;
+
+impl Rule for SshMaxAuthTriesRule {
+    fn id(&self) -> &'static str {
+        "linux.ssh.max-auth-tries"
+    }
+
+    fn title(&self) -> &'static str {
+        "SSH MaxAuthTries Value Exceeds Security Baseline"
+    }
+
+    fn description(&self) -> &'static str {
+        "The SSH daemon allows 6 or more authentication attempts per connection, increasing susceptibility to brute-force credential guessing."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Low
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Set 'MaxAuthTries 4' or lower in /etc/ssh/sshd_config."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(ssh) = context.ssh.as_ref() else {
+            return Vec::new();
+        };
+
+        // OpenSSH upstream default is 6 when omitted
+        let tries = ssh.max_auth_tries.unwrap_or(6);
+
+        if tries >= 6 {
+            let evidence = ssh.max_auth_tries.map_or_else(
+                || "MaxAuthTries omitted (OpenSSH upstream default: 6)".into(),
+                |n| format!("MaxAuthTries {n}"),
+            );
+
+            vec![RuleFinding {
+                rule_id: self.id(),
+                target: "/etc/ssh/sshd_config:MaxAuthTries".into(),
+                title: self.title().into(),
+                description: self.description().into(),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: evidence,
+                evidence_type: EvidenceType::ConfigExcerpt,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// Rule detecting system service accounts configured with interactive login shells.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ServiceAccountInteractiveShellRule;
+
+impl Rule for ServiceAccountInteractiveShellRule {
+    fn id(&self) -> &'static str {
+        "linux.users.service-account-interactive-shell"
+    }
+
+    fn title(&self) -> &'static str {
+        "Service Account Configured with Interactive Login Shell"
+    }
+
+    fn description(&self) -> &'static str {
+        "A system service account (UID < 1000) possesses an interactive shell like /bin/bash or /bin/sh instead of /usr/sbin/nologin."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Medium
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Set service account shell to /usr/sbin/nologin or /bin/false using 'usermod -s /usr/sbin/nologin <user>'."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(users) = context.users.as_ref() else {
+            return Vec::new();
+        };
+
+        users
+            .interactive_service_accounts
+            .iter()
+            .map(|username| RuleFinding {
+                rule_id: self.id(),
+                target: format!("/etc/passwd:{username}"),
+                title: format!("Service Account '{username}' Has Interactive Shell"),
+                description: format!(
+                    "Service account '{username}' has an interactive shell configured, creating an unnecessary login attack surface."
+                ),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: format!("username: {username}"),
+                evidence_type: EvidenceType::ConfigExcerpt,
+            })
+            .collect()
+    }
+}
+
+/// Rule detecting accounts configured with passwordless sudo (`NOPASSWD`).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SudoersNopasswdRule;
+
+impl Rule for SudoersNopasswdRule {
+    fn id(&self) -> &'static str {
+        "linux.users.sudoers-nopasswd"
+    }
+
+    fn title(&self) -> &'static str {
+        "Passwordless Sudo Privileges Granted"
+    }
+
+    fn description(&self) -> &'static str {
+        "One or more users or groups are granted NOPASSWD in sudoers configuration, allowing privilege escalation to root without password verification."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::High
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Require password authentication for sudo executions by removing 'NOPASSWD:' from /etc/sudoers and /etc/sudoers.d/*."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(users) = context.users.as_ref() else {
+            return Vec::new();
+        };
+
+        users
+            .nopasswd_sudo_users
+            .iter()
+            .map(|user| RuleFinding {
+                rule_id: self.id(),
+                target: format!("sudoers:{user}"),
+                title: format!("User '{user}' Granted NOPASSWD Privileges"),
+                description: format!(
+                    "User '{user}' is configured with passwordless sudo access in sudoers."
+                ),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: format!("{user} ALL=(ALL) NOPASSWD:..."),
+                evidence_type: EvidenceType::ConfigExcerpt,
+            })
+            .collect()
+    }
+}
+
+/// Rule alerting on non-root user accounts belonging to privileged sudo or wheel groups.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SudoGroupMemberRule;
+
+impl Rule for SudoGroupMemberRule {
+    fn id(&self) -> &'static str {
+        "linux.users.unauthorized-sudo-group-member"
+    }
+
+    fn title(&self) -> &'static str {
+        "User Account in Privileged Sudo Group"
+    }
+
+    fn description(&self) -> &'static str {
+        "A user account belongs to the 'sudo' or 'wheel' group, granting full administrative root access."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Medium
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Review whether this account legitimately requires sudo access, or remove it with 'gpasswd -d <user> sudo'."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(users) = context.users.as_ref() else {
+            return Vec::new();
+        };
+
+        users
+            .sudo_group_members
+            .iter()
+            .filter(|u| *u != "root")
+            .map(|user| RuleFinding {
+                rule_id: self.id(),
+                target: format!("/etc/group:sudo:{user}"),
+                title: format!("Account '{user}' Is Member of Sudo Group"),
+                description: format!(
+                    "Account '{user}' has administrative privileges via group membership."
+                ),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: format!("group member: {user}"),
+                evidence_type: EvidenceType::ConfigExcerpt,
+            })
+            .collect()
+    }
+}
+
+/// Rule noting SSH daemon listening on a public/wildcard interface.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SshWildcardExposureRule;
+
+impl Rule for SshWildcardExposureRule {
+    fn id(&self) -> &'static str {
+        "linux.ports.ssh-wildcard-exposure"
+    }
+
+    fn title(&self) -> &'static str {
+        "SSH Daemon Listening on Wildcard Interface"
+    }
+
+    fn description(&self) -> &'static str {
+        "The SSH daemon is listening on all network interfaces (0.0.0.0 or ::). Ensure strong key authentication and firewall restrictions are in place."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Info
+    }
+
+    fn remediation(&self) -> &'static str {
+        "If public access is not required, bind SSH to a private network interface or VPN address in /etc/ssh/sshd_config."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let mut findings = Vec::new();
+        for port_info in &context.listening_ports {
+            if port_info.port == 22 && port_info.is_wildcard {
+                findings.push(RuleFinding {
+                    rule_id: self.id(),
+                    target: format!("{}:22", port_info.ip),
+                    title: self.title().into(),
+                    description: format!(
+                        "SSH daemon (port 22) is bound to wildcard address '{}'.",
+                        port_info.ip
+                    ),
+                    remediation: self.remediation().into(),
+                    severity: self.severity(),
+                    evidence_text: format!("{} {}:22 LISTEN", port_info.protocol, port_info.ip),
+                    evidence_type: EvidenceType::SocketState,
+                });
+            }
+        }
+        findings
+    }
+}
+
+/// Rule detecting DNS service listening on a wildcard UDP interface.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DnsPubliclyExposedRule;
+
+impl Rule for DnsPubliclyExposedRule {
+    fn id(&self) -> &'static str {
+        "linux.ports.dns-publicly-exposed"
+    }
+
+    fn title(&self) -> &'static str {
+        "DNS Service Exposed on Wildcard UDP Interface"
+    }
+
+    fn description(&self) -> &'static str {
+        "A DNS server (port 53) is bound to a wildcard address (0.0.0.0 or ::), exposing it to potential DNS amplification attacks or unauthorized queries."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Medium
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Bind the DNS resolver to 127.0.0.1 or restrict incoming queries to trusted local subnets."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let mut findings = Vec::new();
+        for port in &context.udp_ports {
+            if port.port == 53 && port.is_wildcard {
+                findings.push(RuleFinding {
+                    rule_id: self.id(),
+                    target: format!("{}:53/udp", port.ip),
+                    title: self.title().into(),
+                    description: format!(
+                        "DNS service (port 53/udp) is bound to wildcard address '{}'.",
+                        port.ip
+                    ),
+                    remediation: self.remediation().into(),
+                    severity: self.severity(),
+                    evidence_text: format!("{} {}:53", port.protocol, port.ip),
+                    evidence_type: EvidenceType::SocketState,
+                });
+            }
+        }
+        findings
+    }
+}
+
+/// Rule detecting SUID-root binaries outside the standard operating system baseline.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UnexpectedSuidBinaryRule;
+
+impl Rule for UnexpectedSuidBinaryRule {
+    fn id(&self) -> &'static str {
+        "linux.fs.unexpected-suid-binary"
+    }
+
+    fn title(&self) -> &'static str {
+        "Unexpected SUID-Root Executable Detected"
+    }
+
+    fn description(&self) -> &'static str {
+        "A binary with the SUID bit set was found outside the standard system allowlist. SUID binaries run with root privileges and are common privilege escalation vectors."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::High
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Remove the SUID bit using 'chmod u-s <path>' or remove the unauthorized binary."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let mut findings = Vec::new();
+        for binary in &context.suid_binaries {
+            if binary.is_suid && !SUID_ALLOWLIST.contains(&binary.path.as_str()) {
+                findings.push(RuleFinding {
+                    rule_id: self.id(),
+                    target: binary.path.clone(),
+                    title: format!("Unexpected SUID Binary '{}'", binary.path),
+                    description: format!(
+                        "Executable '{}' has SUID permission (0o{:o}) and is not in the system allowlist.",
+                        binary.path, binary.mode
+                    ),
+                    remediation: self.remediation().into(),
+                    severity: self.severity(),
+                    evidence_text: format!("Path: {} Mode: 0o{:o}", binary.path, binary.mode),
+                    evidence_type: EvidenceType::SystemState,
+                });
+            }
+        }
+        findings
+    }
+}
+
+/// Rule detecting SGID binaries outside the standard operating system baseline.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct UnexpectedSgidBinaryRule;
+
+impl Rule for UnexpectedSgidBinaryRule {
+    fn id(&self) -> &'static str {
+        "linux.fs.unexpected-sgid-binary"
+    }
+
+    fn title(&self) -> &'static str {
+        "Unexpected SGID Executable Detected"
+    }
+
+    fn description(&self) -> &'static str {
+        "A binary with the SGID bit set was found outside the standard system allowlist. SGID binaries run with elevated group privileges."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Medium
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Remove the SGID bit using 'chmod g-s <path>' or remove the unauthorized binary."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let mut findings = Vec::new();
+        for binary in &context.suid_binaries {
+            if binary.is_sgid && !SGID_ALLOWLIST.contains(&binary.path.as_str()) {
+                findings.push(RuleFinding {
+                    rule_id: self.id(),
+                    target: binary.path.clone(),
+                    title: format!("Unexpected SGID Binary '{}'", binary.path),
+                    description: format!(
+                        "Executable '{}' has SGID permission (0o{:o}) and is not in the system allowlist.",
+                        binary.path, binary.mode
+                    ),
+                    remediation: self.remediation().into(),
+                    severity: self.severity(),
+                    evidence_text: format!("Path: {} Mode: 0o{:o}", binary.path, binary.mode),
+                    evidence_type: EvidenceType::SystemState,
+                });
+            }
+        }
+        findings
+    }
+}
+
+/// Rule detecting world-writable directories in the system `PATH`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WritablePathEntryRule;
+
+impl Rule for WritablePathEntryRule {
+    fn id(&self) -> &'static str {
+        "linux.users.writable-path-entry"
+    }
+
+    fn title(&self) -> &'static str {
+        "World-Writable Directory in PATH Environment Variable"
+    }
+
+    fn description(&self) -> &'static str {
+        "A directory in the system PATH environment variable is world-writable, allowing any local user to place malicious binaries that may be executed by privileged users."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::High
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Remove world-write permissions using 'chmod 0755 <directory>' or remove the directory from PATH."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let mut findings = Vec::new();
+        for entry in &context.path_entries {
+            if entry.is_world_writable {
+                findings.push(RuleFinding {
+                    rule_id: self.id(),
+                    target: entry.path.clone(),
+                    title: format!("Directory '{}' in PATH Is World-Writable", entry.path),
+                    description: format!(
+                        "Directory '{}' (mode 0o{:o}) can be written to by any local user.",
+                        entry.path, entry.mode
+                    ),
+                    remediation: self.remediation().into(),
+                    severity: self.severity(),
+                    evidence_text: format!("Path: {} Mode: 0o{:o}", entry.path, entry.mode),
+                    evidence_type: EvidenceType::SystemState,
+                });
+            }
+        }
+        findings
+    }
+}
+
+/// Rule detecting unrestricted kernel dmesg access (`kernel.dmesg_restrict = 0`).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KernelDmesgUnrestrictedRule;
+
+impl Rule for KernelDmesgUnrestrictedRule {
+    fn id(&self) -> &'static str {
+        "linux.kernel.dmesg-unrestricted"
+    }
+
+    fn title(&self) -> &'static str {
+        "Unrestricted Kernel Ring Buffer (dmesg) Access"
+    }
+
+    fn description(&self) -> &'static str {
+        "Unprivileged users can read kernel logs via dmesg, potentially exposing kernel addresses and facilitating exploit development."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Medium
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Set 'kernel.dmesg_restrict = 1' in /etc/sysctl.conf and run 'sysctl -p'."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(sysctl) = context.sysctl.as_ref() else {
+            return Vec::new();
+        };
+
+        if sysctl.dmesg_restrict == Some(0) {
+            vec![RuleFinding {
+                rule_id: self.id(),
+                target: "sysctl:kernel.dmesg_restrict".into(),
+                title: self.title().into(),
+                description: self.description().into(),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: "kernel.dmesg_restrict = 0".into(),
+                evidence_type: EvidenceType::SystemState,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// Rule detecting IP forwarding enabled on host (`net.ipv4.ip_forward = 1`).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KernelIpForwardingRule;
+
+impl Rule for KernelIpForwardingRule {
+    fn id(&self) -> &'static str {
+        "linux.kernel.ip-forwarding-enabled"
+    }
+
+    fn title(&self) -> &'static str {
+        "Kernel IPv4 Packet Forwarding Enabled"
+    }
+
+    fn description(&self) -> &'static str {
+        "The kernel is configured to forward IPv4 packets between interfaces, effectively acting as a router. This should be disabled unless the host is a dedicated router or gateway."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::Low
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Set 'net.ipv4.ip_forward = 0' in /etc/sysctl.conf and reload with 'sysctl -p'."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(sysctl) = context.sysctl.as_ref() else {
+            return Vec::new();
+        };
+
+        if sysctl.ip_forward == Some(1) {
+            vec![RuleFinding {
+                rule_id: self.id(),
+                target: "sysctl:net.ipv4.ip_forward".into(),
+                title: self.title().into(),
+                description: self.description().into(),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: "net.ipv4.ip_forward = 1".into(),
+                evidence_type: EvidenceType::SystemState,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// Rule detecting Address Space Layout Randomization (ASLR) disabled (`kernel.randomize_va_space = 0`).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KernelAslrDisabledRule;
+
+impl Rule for KernelAslrDisabledRule {
+    fn id(&self) -> &'static str {
+        "linux.kernel.aslr-disabled"
+    }
+
+    fn title(&self) -> &'static str {
+        "Address Space Layout Randomization (ASLR) Disabled"
+    }
+
+    fn description(&self) -> &'static str {
+        "Memory randomization (ASLR) is disabled, making exploitation of memory corruption bugs trivial and predictable."
+    }
+
+    fn severity(&self) -> Severity {
+        Severity::High
+    }
+
+    fn remediation(&self) -> &'static str {
+        "Set 'kernel.randomize_va_space = 2' in /etc/sysctl.conf and reload with 'sysctl -p'."
+    }
+
+    fn required_privilege(&self) -> PrivilegeLevel {
+        PrivilegeLevel::Unprivileged
+    }
+
+    fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
+        let Some(sysctl) = context.sysctl.as_ref() else {
+            return Vec::new();
+        };
+
+        if sysctl.randomize_va_space == Some(0) {
+            vec![RuleFinding {
+                rule_id: self.id(),
+                target: "sysctl:kernel.randomize_va_space".into(),
+                title: self.title().into(),
+                description: self.description().into(),
+                remediation: self.remediation().into(),
+                severity: self.severity(),
+                evidence_text: "kernel.randomize_va_space = 0".into(),
+                evidence_type: EvidenceType::SystemState,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collector::env::PathEntry;
     use crate::collector::firewall::{FirewallInfo, FirewallKind, FirewallStatus};
     use crate::collector::permissions::FilePermissionInfo;
-    use crate::collector::ports::ListeningPort;
+    use crate::collector::ports::{ListeningPort, ListeningUdpPort};
     use crate::collector::ssh::SshConfig;
+    use crate::collector::suid::SuidBinaryInfo;
+    use crate::collector::sysctl::SysctlInfo;
     use crate::collector::users::{UserAccount, UsersInfo};
 
     #[test]
@@ -659,5 +1399,254 @@ mod tests {
             2,
             "must report both shadow and passwd violations"
         );
+    }
+
+    #[test]
+    fn test_ssh_x11_forwarding_eval() {
+        let rule = SshX11ForwardingRule;
+        let safe_ctx = HostInspectionContext {
+            ssh: Some(SshConfig {
+                x11_forwarding: Some(false),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(rule.evaluate(&safe_ctx).is_empty());
+
+        let danger_ctx = HostInspectionContext {
+            ssh: Some(SshConfig {
+                x11_forwarding: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&danger_ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Low);
+    }
+
+    #[test]
+    fn test_ssh_max_auth_tries_eval() {
+        let rule = SshMaxAuthTriesRule;
+        let safe_ctx = HostInspectionContext {
+            ssh: Some(SshConfig {
+                max_auth_tries: Some(4),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert!(rule.evaluate(&safe_ctx).is_empty());
+
+        let danger_ctx = HostInspectionContext {
+            ssh: Some(SshConfig {
+                max_auth_tries: Some(10),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&danger_ctx);
+        assert_eq!(findings.len(), 1);
+
+        // Omitted defaults to 6 (vulnerable)
+        let omitted_ctx = HostInspectionContext {
+            ssh: Some(SshConfig {
+                max_auth_tries: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(rule.evaluate(&omitted_ctx).len(), 1);
+    }
+
+    #[test]
+    fn test_service_account_shell_eval() {
+        let rule = ServiceAccountInteractiveShellRule;
+        let ctx = HostInspectionContext {
+            users: Some(UsersInfo {
+                interactive_service_accounts: vec!["www-data".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn test_sudoers_nopasswd_eval() {
+        let rule = SudoersNopasswdRule;
+        let ctx = HostInspectionContext {
+            users: Some(UsersInfo {
+                nopasswd_sudo_users: vec!["alice".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn test_sudo_group_member_eval() {
+        let rule = SudoGroupMemberRule;
+        let ctx = HostInspectionContext {
+            users: Some(UsersInfo {
+                sudo_group_members: vec!["root".into(), "alice".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].target, "/etc/group:sudo:alice");
+    }
+
+    #[test]
+    fn test_ssh_wildcard_exposure_eval() {
+        let rule = SshWildcardExposureRule;
+        let ctx = HostInspectionContext {
+            listening_ports: vec![ListeningPort {
+                protocol: "tcp".into(),
+                ip: "0.0.0.0".into(),
+                port: 22,
+                is_wildcard: true,
+                inode: 1234,
+                process_name: None,
+            }],
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Info);
+    }
+
+    #[test]
+    fn test_dns_publicly_exposed_eval() {
+        let rule = DnsPubliclyExposedRule;
+        let ctx = HostInspectionContext {
+            udp_ports: vec![ListeningUdpPort {
+                protocol: "udp".into(),
+                ip: "0.0.0.0".into(),
+                port: 53,
+                is_wildcard: true,
+                inode: 5566,
+                process_name: None,
+            }],
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn test_unexpected_suid_binary_eval() {
+        let rule = UnexpectedSuidBinaryRule;
+        let ctx = HostInspectionContext {
+            suid_binaries: vec![
+                SuidBinaryInfo {
+                    path: "/usr/bin/passwd".into(), // allowed
+                    mode: 0o4755,
+                    is_suid: true,
+                    is_sgid: false,
+                },
+                SuidBinaryInfo {
+                    path: "/tmp/setuid-bash".into(), // unexpected
+                    mode: 0o4755,
+                    is_suid: true,
+                    is_sgid: false,
+                },
+            ],
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].target, "/tmp/setuid-bash");
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn test_unexpected_sgid_binary_eval() {
+        let rule = UnexpectedSgidBinaryRule;
+        let ctx = HostInspectionContext {
+            suid_binaries: vec![
+                SuidBinaryInfo {
+                    path: "/usr/bin/crontab".into(), // allowed
+                    mode: 0o2755,
+                    is_suid: false,
+                    is_sgid: true,
+                },
+                SuidBinaryInfo {
+                    path: "/tmp/shadow-reader".into(), // unexpected
+                    mode: 0o2755,
+                    is_suid: false,
+                    is_sgid: true,
+                },
+            ],
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].target, "/tmp/shadow-reader");
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn test_writable_path_entry_eval() {
+        let rule = WritablePathEntryRule;
+        let ctx = HostInspectionContext {
+            path_entries: vec![
+                PathEntry {
+                    path: "/usr/bin".into(),
+                    exists: true,
+                    mode: 0o755,
+                    is_world_writable: false,
+                },
+                PathEntry {
+                    path: "/tmp/evil".into(),
+                    exists: true,
+                    mode: 0o777,
+                    is_world_writable: true,
+                },
+            ],
+            ..Default::default()
+        };
+        let findings = rule.evaluate(&ctx);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].target, "/tmp/evil");
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn test_kernel_sysctl_rules_eval() {
+        let dmesg_rule = KernelDmesgUnrestrictedRule;
+        let ip_forward_rule = KernelIpForwardingRule;
+        let aslr_rule = KernelAslrDisabledRule;
+
+        let safe_ctx = HostInspectionContext {
+            sysctl: Some(SysctlInfo {
+                dmesg_restrict: Some(1),
+                ip_forward: Some(0),
+                randomize_va_space: Some(2),
+            }),
+            ..Default::default()
+        };
+        assert!(dmesg_rule.evaluate(&safe_ctx).is_empty());
+        assert!(ip_forward_rule.evaluate(&safe_ctx).is_empty());
+        assert!(aslr_rule.evaluate(&safe_ctx).is_empty());
+
+        let danger_ctx = HostInspectionContext {
+            sysctl: Some(SysctlInfo {
+                dmesg_restrict: Some(0),
+                ip_forward: Some(1),
+                randomize_va_space: Some(0),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(dmesg_rule.evaluate(&danger_ctx).len(), 1);
+        assert_eq!(ip_forward_rule.evaluate(&danger_ctx).len(), 1);
+        assert_eq!(aslr_rule.evaluate(&danger_ctx).len(), 1);
     }
 }
