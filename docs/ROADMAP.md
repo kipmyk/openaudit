@@ -16,7 +16,7 @@ This document outlines the phased development roadmap for OpenAudit. Milestones 
 
 ## Milestone Specifications
 
-### Milestone M0: Project Foundation (Current)
+### Milestone M0: Project Foundation (Completed)
 - **Objective:** Establish architectural clarity, formal threat model, landscape research, repository governance, Rust workspace, and automated CI.
 - **Scope:**
   - Complete architectural definitions (`ARCHITECTURE.md`).
@@ -31,7 +31,7 @@ This document outlines the phased development roadmap for OpenAudit. Milestones 
 
 ---
 
-### Milestone M1: Core Domain Models
+### Milestone M1: Core Domain Models (Completed - Verified Locally)
 - **Objective:** Build the platform's core domain types and invariants in `crates/openaudit-core`.
 - **Scope:**
   - `Asset` entity and typed identifiers (`AssetId`, `OrganizationId`).
