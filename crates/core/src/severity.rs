@@ -1,9 +1,9 @@
 //! Finding severity classification and ordering.
 
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
-use serde::{Deserialize, Serialize};
 
 use crate::error::DomainError;
 
