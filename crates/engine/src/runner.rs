@@ -3,7 +3,7 @@
 use std::time::Instant;
 
 use openaudit_core::{
-    Asset, AssetType, Evidence, EvidencePayload, Finding, OrganizationId, ScanSummary,
+    Asset, AssetId, AssetType, Evidence, EvidencePayload, Finding, OrganizationId, ScanSummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -114,7 +114,22 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
             .as_ref()
             .map_or("localhost", |os| os.pretty_name.as_str());
 
-        let asset = Asset::new(org_id, host_name, AssetType::LinuxHost, "127.0.0.1")?;
+        let asset_seed = os_info
+            .as_ref()
+            .and_then(|os| os.machine_id.as_deref())
+            .map_or_else(
+                || format!("{org_id}:{host_name}"),
+                |mid| format!("{org_id}:{mid}"),
+            );
+
+        let asset_id = AssetId::from_seed(asset_seed.as_bytes());
+        let asset = Asset::with_id(
+            asset_id,
+            org_id,
+            host_name,
+            AssetType::LinuxHost,
+            "127.0.0.1",
+        )?;
 
         // 3. Evaluate rules
         let mut finding_items = Vec::new();
@@ -125,7 +140,7 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
                 continue;
             }
 
-            if let Some(rule_finding) = rule.evaluate(&context) {
+            for rule_finding in rule.evaluate(&context) {
                 let finding = Finding::new(
                     org_id,
                     asset.id,
@@ -188,6 +203,17 @@ mod tests {
         fn file_mode(&self, _path: &str) -> Result<u32, EngineError> {
             Ok(0o644)
         }
+
+        fn read_dir(&self, _path: &str) -> Result<Vec<String>, EngineError> {
+            Ok(Vec::new())
+        }
+
+        fn read_link(&self, _path: &str) -> Result<String, EngineError> {
+            Err(EngineError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            )))
+        }
     }
 
     struct MockAuditRunner;
@@ -219,5 +245,23 @@ mod tests {
             assert!(item.evidence.is_redacted);
             assert_eq!(item.finding.id, item.evidence.finding_id);
         }
+    }
+
+    #[test]
+    fn test_audit_engine_deterministic_asset_id() {
+        let org_id = OrganizationId::new();
+        let engine = AuditEngine::new(MockAuditFs, MockAuditRunner, default_linux_rules());
+
+        let report1 = engine
+            .run_local_audit(org_id)
+            .expect("first run should succeed");
+        let report2 = engine
+            .run_local_audit(org_id)
+            .expect("second run should succeed");
+
+        assert_eq!(
+            report1.asset.id, report2.asset.id,
+            "AssetId must be deterministic across runs against the same host"
+        );
     }
 }
