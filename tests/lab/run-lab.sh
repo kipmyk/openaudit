@@ -19,7 +19,7 @@ docker build -q -t "$IMAGE" "$LAB_DIR" >/dev/null
 SCENARIOS=$(python3 -c "import json,sys; print(' '.join(json.load(open(sys.argv[1]))['scenarios']))" "$LAB_DIR/expected.json")
 for id in $SCENARIOS; do
     echo "running $id" >&2
-    docker run --rm --cap-add NET_ADMIN \
+    docker run --rm --privileged \
         -v "$BIN":/opt/openaudit/openaudit-cli:ro \
         -v "$LAB_DIR":/lab:ro \
         -v "$OUT":/out \
