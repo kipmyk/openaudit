@@ -3,9 +3,9 @@
 //! Using distinct newtypes prevents logic bugs where IDs of different entities
 //! are accidentally swapped or mixed up.
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::DomainError;
@@ -13,7 +13,9 @@ use crate::error::DomainError;
 macro_rules! define_id {
     ($name:ident, $doc:expr) => {
         #[doc = $doc]
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(Uuid);
 
@@ -87,13 +89,22 @@ macro_rules! define_id {
     };
 }
 
-define_id!(OrganizationId, "Unique identifier for an organization (tenant boundary).");
-define_id!(AssetId, "Unique identifier for a monitored infrastructure asset.");
+define_id!(
+    OrganizationId,
+    "Unique identifier for an organization (tenant boundary)."
+);
+define_id!(
+    AssetId,
+    "Unique identifier for a monitored infrastructure asset."
+);
 define_id!(ScanId, "Unique identifier for an audit scan execution.");
 define_id!(ScanJobId, "Unique identifier for an atomic scan job.");
 define_id!(FindingId, "Unique identifier for a security finding.");
 define_id!(EvidenceId, "Unique identifier for an evidence artifact.");
-define_id!(AgentId, "Unique identifier for an enrolled host monitoring agent.");
+define_id!(
+    AgentId,
+    "Unique identifier for an enrolled host monitoring agent."
+);
 
 #[cfg(test)]
 mod tests {
@@ -129,7 +140,7 @@ mod tests {
     fn test_id_json_serde_roundtrip() {
         let org_id = OrganizationId::new();
         let serialized = serde_json::to_string(&org_id).expect("should serialize");
-        assert_eq!(serialized, format!("\"{}\"", org_id));
+        assert_eq!(serialized, format!("\"{org_id}\""));
         let deserialized: OrganizationId =
             serde_json::from_str(&serialized).expect("should deserialize");
         assert_eq!(org_id, deserialized);
