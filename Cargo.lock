@@ -257,6 +257,9 @@ name = "openaudit-engine"
 version = "0.1.0-alpha.0"
 dependencies = [
  "openaudit-core",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
