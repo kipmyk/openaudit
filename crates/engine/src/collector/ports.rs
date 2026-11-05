@@ -40,59 +40,15 @@ impl ListeningPort {
         }
 
         if fs.exists("/proc") {
-            Self::correlate_processes(fs, &mut ports);
-        }
-
-        Ok(ports)
-    }
-
-    /// Correlates socket inodes with process names by scanning `/proc/<pid>/fd/*`.
-    fn correlate_processes<FS: FileSystem>(fs: &FS, ports: &mut [Self]) {
-        let Ok(entries) = fs.read_dir("/proc") else {
-            return;
-        };
-
-        let mut inode_to_process = std::collections::HashMap::new();
-
-        for entry in entries {
-            let Some(dir_name) = entry.rsplit('/').next() else {
-                continue;
-            };
-
-            if !dir_name.chars().all(|c| c.is_ascii_digit()) {
-                continue;
-            }
-
-            let comm_path = format!("{entry}/comm");
-            let Ok(comm) = fs.read_to_string(&comm_path) else {
-                continue;
-            };
-            let proc_name = comm.trim().to_string();
-
-            let fd_dir = format!("{entry}/fd");
-            let Ok(fds) = fs.read_dir(&fd_dir) else {
-                continue;
-            };
-
-            for fd in fds {
-                if let Ok(target) = fs.read_link(&fd) {
-                    if let Some(inode_str) = target
-                        .strip_prefix("socket:[")
-                        .and_then(|s| s.strip_suffix(']'))
-                    {
-                        if let Ok(inode) = inode_str.parse::<u64>() {
-                            inode_to_process.insert(inode, proc_name.clone());
-                        }
-                    }
+            let map = get_inode_to_process_map(fs);
+            for port in &mut ports {
+                if let Some(proc_name) = map.get(&port.inode) {
+                    port.process_name = Some(proc_name.clone());
                 }
             }
         }
 
-        for port in ports {
-            if let Some(proc_name) = inode_to_process.get(&port.inode) {
-                port.process_name = Some(proc_name.clone());
-            }
-        }
+        Ok(ports)
     }
 
     /// Parses `/proc/net/tcp` or `/proc/net/tcp6` file contents.
@@ -132,6 +88,154 @@ impl ListeningPort {
 
                     list.push(Self {
                         protocol: if is_ipv6 { "tcp6".into() } else { "tcp".into() },
+                        ip,
+                        port,
+                        is_wildcard,
+                        inode,
+                        process_name: None,
+                    });
+                }
+            }
+        }
+
+        Ok(list)
+    }
+}
+
+/// Correlates socket inodes with process names by scanning `/proc/<pid>/fd/*`.
+fn get_inode_to_process_map<FS: FileSystem>(fs: &FS) -> std::collections::HashMap<u64, String> {
+    let mut inode_to_process = std::collections::HashMap::new();
+
+    let Ok(entries) = fs.read_dir("/proc") else {
+        return inode_to_process;
+    };
+
+    for entry in entries {
+        let Some(dir_name) = entry.rsplit('/').next() else {
+            continue;
+        };
+
+        if !dir_name.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+
+        let comm_path = format!("{entry}/comm");
+        let Ok(comm) = fs.read_to_string(&comm_path) else {
+            continue;
+        };
+        let proc_name = comm.trim().to_string();
+
+        let fd_dir = format!("{entry}/fd");
+        let Ok(fds) = fs.read_dir(&fd_dir) else {
+            continue;
+        };
+
+        for fd in fds {
+            if let Ok(target) = fs.read_link(&fd) {
+                if let Some(inode_str) = target
+                    .strip_prefix("socket:[")
+                    .and_then(|s| s.strip_suffix(']'))
+                {
+                    if let Ok(inode) = inode_str.parse::<u64>() {
+                        inode_to_process.insert(inode, proc_name.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    inode_to_process
+}
+
+/// Represents an active listening UDP socket on the host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListeningUdpPort {
+    /// Transport protocol (e.g., "udp", "udp6").
+    pub protocol: String,
+    /// Bound local IP address (e.g., "0.0.0.0", "127.0.0.1", "::").
+    pub ip: String,
+    /// Bound listening port.
+    pub port: u16,
+    /// Whether the port is bound to a wildcard interface ("0.0.0.0" or "::").
+    pub is_wildcard: bool,
+    /// Socket inode identifier.
+    pub inode: u64,
+    /// Associated process name parsed from `/proc/<pid>/comm`, if available.
+    pub process_name: Option<String>,
+}
+
+impl ListeningUdpPort {
+    /// Collects all listening UDP sockets from `/proc/net/udp` and `/proc/net/udp6`.
+    ///
+    /// # Errors
+    /// Returns an [`EngineError`] if reading `/proc/net/udp` or parsing fails.
+    pub fn collect<FS: FileSystem>(fs: &FS) -> Result<Vec<Self>, EngineError> {
+        let mut ports = Vec::new();
+
+        if fs.exists("/proc/net/udp") {
+            let content = fs.read_to_string("/proc/net/udp")?;
+            ports.extend(Self::parse_udp(&content, false)?);
+        }
+
+        if fs.exists("/proc/net/udp6") {
+            let content = fs.read_to_string("/proc/net/udp6")?;
+            ports.extend(Self::parse_udp(&content, true)?);
+        }
+
+        if fs.exists("/proc") {
+            let map = get_inode_to_process_map(fs);
+            for port in &mut ports {
+                if let Some(proc_name) = map.get(&port.inode) {
+                    port.process_name = Some(proc_name.clone());
+                }
+            }
+        }
+
+        Ok(ports)
+    }
+
+    /// Parses `/proc/net/udp` or `/proc/net/udp6` file contents.
+    ///
+    /// # Errors
+    /// Returns an [`EngineError`] if parsing socket lines fails.
+    pub fn parse_udp(content: &str, is_ipv6: bool) -> Result<Vec<Self>, EngineError> {
+        let mut list = Vec::new();
+
+        for line in content.lines().skip(1) {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() < 10 {
+                continue;
+            }
+
+            let addr_str = fields[1];
+            let rem_addr = fields[2];
+
+            // Only consider sockets without a connected remote peer
+            let is_unconnected = if is_ipv6 {
+                rem_addr.starts_with("00000000000000000000000000000000:")
+            } else {
+                rem_addr.starts_with("00000000:")
+            };
+
+            if !is_unconnected {
+                continue;
+            }
+
+            let inode = fields
+                .get(9)
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+
+            if let Some((hex_ip, hex_port)) = addr_str.split_once(':') {
+                if let Ok(port) = u16::from_str_radix(hex_port, 16) {
+                    let (ip, is_wildcard) = if is_ipv6 {
+                        parse_hex_ipv6(hex_ip)
+                    } else {
+                        parse_hex_ipv4(hex_ip)
+                    };
+
+                    list.push(Self {
+                        protocol: if is_ipv6 { "udp6".into() } else { "udp".into() },
                         ip,
                         port,
                         is_wildcard,
@@ -202,5 +306,29 @@ mod tests {
         assert_eq!(ports[1].port, 5432);
         assert!(!ports[1].is_wildcard);
         assert_eq!(ports[1].inode, 51920);
+    }
+
+    #[test]
+    fn test_parse_proc_net_udp() {
+        let sample = r"  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops
+   0: 00000000:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000   101        0 33445 2 0000000000000000 0
+   1: 0100007F:0035 00000000:0000 07 00000000:00000000 00:00000000 00000000   101        0 33446 2 0000000000000000 0
+";
+        let udp_ports = ListeningUdpPort::parse_udp(sample, false).expect("valid parse");
+        assert_eq!(udp_ports.len(), 2);
+
+        // Port 53 on 0.0.0.0 (wildcard)
+        assert_eq!(udp_ports[0].protocol, "udp");
+        assert_eq!(udp_ports[0].ip, "0.0.0.0");
+        assert_eq!(udp_ports[0].port, 53);
+        assert!(udp_ports[0].is_wildcard);
+        assert_eq!(udp_ports[0].inode, 33445);
+
+        // Port 53 on 127.0.0.1 (loopback)
+        assert_eq!(udp_ports[1].protocol, "udp");
+        assert_eq!(udp_ports[1].ip, "127.0.0.1");
+        assert_eq!(udp_ports[1].port, 53);
+        assert!(!udp_ports[1].is_wildcard);
+        assert_eq!(udp_ports[1].inode, 33446);
     }
 }
