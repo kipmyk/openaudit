@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/kipmyk/openaudit/actions/workflows/ci.yml/badge.svg)](https://github.com/kipmyk/openaudit/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status: Pre-Alpha](https://img.shields.io/badge/Status-Pre--Alpha_(M0)-orange.svg)](#current-status)
+[![Status: Pre-Alpha](https://img.shields.io/badge/Status-Pre--Alpha_(v0.2.0--m2)-orange.svg)](#current-status)
 
 ---
 
@@ -30,19 +30,21 @@ OpenAudit gives organizations complete ownership of their security data and the 
 
 ## 3. Current Status
 
-> **Important:** OpenAudit is currently in active early foundation (**Milestone M0**). 
-> All planned features described below represent architectural design objectives and are under incremental development. There are currently no compiled production releases.
+> **Current Status: Pre-Alpha (`v0.2.0-m2`)**  
+> OpenAudit has completed **Milestone M2 (Linux Auditing Engine)** with release **`v0.2.0-m2`**. 
+> The local host auditing CLI evaluates 20 built-in security rules across 55 verified empirical lab scenarios with 100% precision and recall on Ubuntu 24.04 LTS.
 
 | Milestone | Scope | Status |
 |---|---|---|
 | **M0: Foundation** | Project architecture, threat modeling, workspace foundation, CI | **Completed** |
-| **M1: Core Domain** | Domain models (Asset, Scan, Finding, Severity, Evidence), error types | **Completed (Verified Locally)** |
-| **M2: Linux Auditing Engine** | Local host audit (Ubuntu/Debian) via standalone CLI | Planned |
-| **M3: Agentless Perimeter Auditing** | DNS, TLS, and HTTP security posture checks with SSRF defenses | Planned |
-| **M4: Control Plane & Persistence** | Axum HTTP API, PostgreSQL persistence, transactional scheduling | Planned |
-| **M5: Agent Communication** | Outbound agent polling, identity management, secure enrollment | Planned |
-| **M6: Reporting & Lifecycle** | Finding lifecycle, diff tracking, evidence export (JSON/HTML) | Planned |
-| **M7: Public Alpha** | End-to-end verified release and documented deployment | Planned |
+| **M1: Core Domain** | Domain models (Asset, Scan, Finding, Severity, Evidence), error types | **Completed** |
+| **M2: Linux Auditing Engine** | Local host audit (Ubuntu/Debian) via standalone CLI (`v0.2.0-m2`) | **Completed (55 Lab Scenarios, 100% Precision/Recall)** |
+| **M3: Cross-Platform & Validation** | Core platform abstraction, multi-distro validation, Windows/macOS | Planned |
+| **M4: Agentless Perimeter Auditing** | DNS, TLS, and HTTP security posture checks with SSRF defenses | Planned |
+| **M5: Control Plane & Persistence** | Axum HTTP API, PostgreSQL persistence, transactional scheduling | Planned |
+| **M6: Agent Communication** | Outbound agent polling, identity management, secure enrollment | Planned |
+| **M7: Reporting & Lifecycle** | Finding lifecycle, diff tracking, evidence export (JSON/HTML) | Planned |
+| **M8: Public Alpha** | End-to-end verified release and documented deployment | Planned |
 
 ---
 
@@ -130,11 +132,20 @@ cargo test
 
 ## 7. Documentation Index
 
+### Core Architecture & Foundations
 - [Architecture Design & Technical Decisions](docs/ARCHITECTURE.md)
 - [Threat Model & Security Boundaries](docs/THREAT-MODEL.md)
 - [PostgreSQL Multi-Tenant Data Model](docs/DATA-MODEL.md)
 - [Landscape Research & Project Positioning](docs/RESEARCH.md)
 - [Milestone Development Roadmap](docs/ROADMAP.md)
+
+### Milestone M2 Reports & Evidence
+- [M2 Detection Lab Baseline Report](docs/M2-BASELINE-REPORT.md)
+- [M2.1 Reliability & Defect Remediation Report](docs/M2.1-COMPARISON-REPORT.md)
+- [M2.2 55-Scenario Lab Evaluation Report](docs/M2.2-LAB-RESULTS.md)
+- [M2.3 Independent Validation Report](docs/M2.3-INDEPENDENT-VALIDATION-REPORT.md)
+
+### Contributing & Security
 - [Security Policy & Vulnerability Reporting](SECURITY.md)
 - [Developer Contribution Guidelines](CONTRIBUTING.md)
 
