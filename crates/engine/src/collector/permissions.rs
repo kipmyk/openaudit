@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub const CRITICAL_PATHS: &[&str] = &[
     "/etc/shadow",
     "/etc/passwd",
+    "/etc/group",
     "/etc/sudoers",
     "/etc/ssh/sshd_config",
 ];
