@@ -20,6 +20,6 @@ mod tests {
 
     #[test]
     fn test_engine_version_not_empty() {
-        assert!(!version().is_empty());
+        assert_ne!(version(), "");
     }
 }
