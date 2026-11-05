@@ -11,10 +11,12 @@
 pub mod collector;
 pub mod error;
 pub mod rule;
+pub mod runner;
 
 pub use collector::{HostInspectionContext, PrivilegeLevel};
 pub use error::EngineError;
 pub use rule::{builtin::default_linux_rules, Rule, RuleFinding};
+pub use runner::{AuditEngine, AuditFindingItem, AuditReport};
 
 /// Returns the current version of the OpenAudit inspection engine.
 #[must_use]
