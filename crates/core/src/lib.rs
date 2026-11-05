@@ -24,4 +24,3 @@ mod tests {
         assert_ne!(version(), "");
     }
 }
-
