@@ -8,6 +8,10 @@
 
 #![doc(html_root_url = "https://docs.rs/openaudit-engine/0.1.0-alpha.0")]
 
+pub mod error;
+
+pub use error::EngineError;
+
 /// Returns the current version of the OpenAudit inspection engine.
 #[must_use]
 pub const fn version() -> &'static str {
