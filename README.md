@@ -35,8 +35,8 @@ OpenAudit gives organizations complete ownership of their security data and the 
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M0: Foundation** | Project architecture, threat modeling, workspace foundation, CI | **In Progress (Active)** |
-| **M1: Core Domain** | Domain models (Asset, Scan, Finding, Severity, Evidence), error types | Planned |
+| **M0: Foundation** | Project architecture, threat modeling, workspace foundation, CI | **Completed** |
+| **M1: Core Domain** | Domain models (Asset, Scan, Finding, Severity, Evidence), error types | **Completed (Verified Locally)** |
 | **M2: Linux Auditing Engine** | Local host audit (Ubuntu/Debian) via standalone CLI | Planned |
 | **M3: Agentless Perimeter Auditing** | DNS, TLS, and HTTP security posture checks with SSRF defenses | Planned |
 | **M4: Control Plane & Persistence** | Axum HTTP API, PostgreSQL persistence, transactional scheduling | Planned |
