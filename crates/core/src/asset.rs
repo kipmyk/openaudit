@@ -32,7 +32,9 @@ pub enum Environment {
 }
 
 /// Business and operational criticality rating of an asset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Criticality {
     /// Low operational impact if compromised or degraded.
