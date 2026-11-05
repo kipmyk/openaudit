@@ -104,49 +104,37 @@ impl SshConfig {
                         let _ = Self::parse_file(fs, inc_pattern, config, excerpt_lines);
                     }
                 }
-                "permitrootlogin" => {
+                "permitrootlogin" if config.permit_root_login.is_none() => {
                     // OpenSSH standard: for each directive, the first obtained value wins
-                    if config.permit_root_login.is_none() {
-                        config.permit_root_login = Some(val.to_lowercase());
-                        excerpt_lines.push(format!("PermitRootLogin {val}"));
-                    }
+                    config.permit_root_login = Some(val.to_lowercase());
+                    excerpt_lines.push(format!("PermitRootLogin {val}"));
                 }
-                "passwordauthentication" => {
+                "passwordauthentication" if config.password_authentication.is_none() => {
                     // OpenSSH standard: for each directive, the first obtained value wins
-                    if config.password_authentication.is_none() {
-                        let is_yes = val.eq_ignore_ascii_case("yes");
-                        config.password_authentication = Some(is_yes);
-                        excerpt_lines.push(format!("PasswordAuthentication {val}"));
+                    let is_yes = val.eq_ignore_ascii_case("yes");
+                    config.password_authentication = Some(is_yes);
+                    excerpt_lines.push(format!("PasswordAuthentication {val}"));
+                }
+                "pubkeyauthentication" if config.pubkey_authentication.is_none() => {
+                    let is_yes = val.eq_ignore_ascii_case("yes");
+                    config.pubkey_authentication = Some(is_yes);
+                    excerpt_lines.push(format!("PubkeyAuthentication {val}"));
+                }
+                "x11forwarding" if config.x11_forwarding.is_none() => {
+                    let is_yes = val.eq_ignore_ascii_case("yes");
+                    config.x11_forwarding = Some(is_yes);
+                    excerpt_lines.push(format!("X11Forwarding {val}"));
+                }
+                "maxauthtries" if config.max_auth_tries.is_none() => {
+                    if let Ok(num) = val.parse::<u32>() {
+                        config.max_auth_tries = Some(num);
+                        excerpt_lines.push(format!("MaxAuthTries {val}"));
                     }
                 }
-                "pubkeyauthentication" => {
-                    if config.pubkey_authentication.is_none() {
-                        let is_yes = val.eq_ignore_ascii_case("yes");
-                        config.pubkey_authentication = Some(is_yes);
-                        excerpt_lines.push(format!("PubkeyAuthentication {val}"));
-                    }
-                }
-                "x11forwarding" => {
-                    if config.x11_forwarding.is_none() {
-                        let is_yes = val.eq_ignore_ascii_case("yes");
-                        config.x11_forwarding = Some(is_yes);
-                        excerpt_lines.push(format!("X11Forwarding {val}"));
-                    }
-                }
-                "maxauthtries" => {
-                    if config.max_auth_tries.is_none() {
-                        if let Ok(num) = val.parse::<u32>() {
-                            config.max_auth_tries = Some(num);
-                            excerpt_lines.push(format!("MaxAuthTries {val}"));
-                        }
-                    }
-                }
-                "port" => {
-                    if config.port.is_none() {
-                        if let Ok(num) = val.parse::<u16>() {
-                            config.port = Some(num);
-                            excerpt_lines.push(format!("Port {val}"));
-                        }
+                "port" if config.port.is_none() => {
+                    if let Ok(num) = val.parse::<u16>() {
+                        config.port = Some(num);
+                        excerpt_lines.push(format!("Port {val}"));
                     }
                 }
                 _ => {}
@@ -222,7 +210,7 @@ MaxAuthTries 4
         let sample = "# All comments\n# PermitRootLogin no\n";
         let config = SshConfig::parse(sample).expect("valid parse");
         assert_eq!(config.permit_root_login, None);
-        assert!(config.raw_excerpt.is_empty());
+        assert_eq!(config.raw_excerpt, "");
     }
 
     #[test]
