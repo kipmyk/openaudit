@@ -17,6 +17,8 @@ pub struct ListeningPort {
     pub is_wildcard: bool,
     /// Socket inode identifier.
     pub inode: u64,
+    /// Associated process name parsed from `/proc/<pid>/comm`, if available.
+    pub process_name: Option<String>,
 }
 
 impl ListeningPort {
@@ -37,7 +39,60 @@ impl ListeningPort {
             ports.extend(Self::parse_tcp(&content, true)?);
         }
 
+        if fs.exists("/proc") {
+            Self::correlate_processes(fs, &mut ports);
+        }
+
         Ok(ports)
+    }
+
+    /// Correlates socket inodes with process names by scanning `/proc/<pid>/fd/*`.
+    fn correlate_processes<FS: FileSystem>(fs: &FS, ports: &mut [Self]) {
+        let Ok(entries) = fs.read_dir("/proc") else {
+            return;
+        };
+
+        let mut inode_to_process = std::collections::HashMap::new();
+
+        for entry in entries {
+            let Some(dir_name) = entry.rsplit('/').next() else {
+                continue;
+            };
+
+            if !dir_name.chars().all(|c| c.is_ascii_digit()) {
+                continue;
+            }
+
+            let comm_path = format!("{entry}/comm");
+            let Ok(comm) = fs.read_to_string(&comm_path) else {
+                continue;
+            };
+            let proc_name = comm.trim().to_string();
+
+            let fd_dir = format!("{entry}/fd");
+            let Ok(fds) = fs.read_dir(&fd_dir) else {
+                continue;
+            };
+
+            for fd in fds {
+                if let Ok(target) = fs.read_link(&fd) {
+                    if let Some(inode_str) = target
+                        .strip_prefix("socket:[")
+                        .and_then(|s| s.strip_suffix(']'))
+                    {
+                        if let Ok(inode) = inode_str.parse::<u64>() {
+                            inode_to_process.insert(inode, proc_name.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        for port in ports {
+            if let Some(proc_name) = inode_to_process.get(&port.inode) {
+                port.process_name = Some(proc_name.clone());
+            }
+        }
     }
 
     /// Parses `/proc/net/tcp` or `/proc/net/tcp6` file contents.
@@ -81,6 +136,7 @@ impl ListeningPort {
                         port,
                         is_wildcard,
                         inode,
+                        process_name: None,
                     });
                 }
             }
