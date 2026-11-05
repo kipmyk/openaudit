@@ -13,11 +13,13 @@ PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
 X11Forwarding no
+MaxAuthTries 4
 EOF
 chmod 0644 /etc/ssh/sshd_config
 
 # --- Critical file permissions ---
 chmod 0644 /etc/passwd
+chmod 0644 /etc/group
 chown root:shadow /etc/shadow
 chmod 0640 /etc/shadow
 chmod 0440 /etc/sudoers
@@ -45,6 +47,18 @@ s = socket.socket(fam, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind((sys.argv[2], int(sys.argv[3])))
 s.listen()
+time.sleep(3600)
+PY
+    sleep 1
+}
+
+# --- Helper: start a UDP listener. Usage: listen_udp <4|6> <addr> <port>
+listen_udp() {
+    python3 - "$1" "$2" "$3" <<'PY' &
+import socket, sys, time
+fam = socket.AF_INET6 if sys.argv[1] == "6" else socket.AF_INET
+s = socket.socket(fam, socket.SOCK_DGRAM)
+s.bind((sys.argv[2], int(sys.argv[3])))
 time.sleep(3600)
 PY
     sleep 1
