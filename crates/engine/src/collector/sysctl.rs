@@ -138,4 +138,3 @@ mod tests {
         assert_eq!(info.randomize_va_space, None);
     }
 }
-
