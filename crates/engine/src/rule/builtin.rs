@@ -1246,7 +1246,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(rule.evaluate(&safe_context).is_empty());
+        assert_eq!(rule.evaluate(&safe_context), []);
 
         // Dangerous
         let danger_context = HostInspectionContext {
@@ -1431,7 +1431,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(rule.evaluate(&safe_ctx).is_empty());
+        assert_eq!(rule.evaluate(&safe_ctx), []);
 
         let danger_ctx = HostInspectionContext {
             ssh: Some(SshConfig {
@@ -1455,7 +1455,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(rule.evaluate(&safe_ctx).is_empty());
+        assert_eq!(rule.evaluate(&safe_ctx), []);
 
         let danger_ctx = HostInspectionContext {
             ssh: Some(SshConfig {
@@ -1653,9 +1653,9 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert!(dmesg_rule.evaluate(&safe_ctx).is_empty());
-        assert!(ip_forward_rule.evaluate(&safe_ctx).is_empty());
-        assert!(aslr_rule.evaluate(&safe_ctx).is_empty());
+        assert_eq!(dmesg_rule.evaluate(&safe_ctx), []);
+        assert_eq!(ip_forward_rule.evaluate(&safe_ctx), []);
+        assert_eq!(aslr_rule.evaluate(&safe_ctx), []);
 
         let danger_ctx = HostInspectionContext {
             sysctl: Some(SysctlInfo {
