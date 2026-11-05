@@ -18,6 +18,8 @@ EOF
 chmod 0644 /etc/ssh/sshd_config
 
 # --- Critical file permissions and account state ---
+echo "4b0b134d193b48f68ca98418ff8855e9" > /etc/machine-id
+chmod 0444 /etc/machine-id 2>/dev/null || true
 chmod 0644 /etc/passwd
 chmod 0644 /etc/group
 chown root:shadow /etc/shadow
