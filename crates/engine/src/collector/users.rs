@@ -28,10 +28,16 @@ pub struct UsersInfo {
     pub accounts: Vec<UserAccount>,
     /// Accounts discovered with empty password hashes in /etc/shadow.
     pub empty_password_accounts: Vec<String>,
+    /// Accounts discovered in sudo or wheel groups in /etc/group.
+    pub sudo_group_members: Vec<String>,
+    /// Accounts configured with NOPASSWD in /etc/sudoers or /etc/sudoers.d/*.
+    pub nopasswd_sudo_users: Vec<String>,
+    /// Service accounts (0 < UID < 1000) configured with an interactive shell.
+    pub interactive_service_accounts: Vec<String>,
 }
 
 impl UsersInfo {
-    /// Collects user accounts from `/etc/passwd` and `/etc/shadow`.
+    /// Collects user accounts from `/etc/passwd`, `/etc/shadow`, `/etc/group`, and sudoers.
     ///
     /// # Errors
     /// Returns an [`EngineError`] if reading `/etc/passwd` fails.
@@ -48,6 +54,14 @@ impl UsersInfo {
                 info.empty_password_accounts = Self::parse_shadow_empty_passwords(&shadow_content);
             }
         }
+
+        if fs.exists("/etc/group") {
+            if let Ok(group_content) = fs.read_to_string("/etc/group") {
+                info.sudo_group_members = Self::parse_group_sudo_members(&group_content);
+            }
+        }
+
+        info.nopasswd_sudo_users = Self::collect_sudoers_nopasswd(fs);
 
         Ok(info)
     }
@@ -71,6 +85,79 @@ impl UsersInfo {
             }
         }
         bad
+    }
+
+    /// Parses `/etc/group` and extracts accounts belonging to `sudo` or `wheel` groups.
+    #[must_use]
+    pub fn parse_group_sudo_members(content: &str) -> Vec<String> {
+        let mut members = Vec::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 4 {
+                let group_name = parts[0];
+                if group_name == "sudo" || group_name == "wheel" {
+                    for user in parts[3].split(',') {
+                        let user = user.trim();
+                        if !user.is_empty() && !members.contains(&user.to_string()) {
+                            members.push(user.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        members.sort();
+        members
+    }
+
+    /// Parses sudoers format text for NOPASSWD grants.
+    pub fn parse_sudoers_nopasswd_content(content: &str, users: &mut Vec<String>) {
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if line.contains("NOPASSWD") {
+                if let Some(user) = line.split_whitespace().next() {
+                    let user = user.trim();
+                    if !user.is_empty()
+                        && !user.starts_with('#')
+                        && !users.contains(&user.to_string())
+                    {
+                        users.push(user.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Collects accounts with NOPASSWD sudo access from `/etc/sudoers` and `/etc/sudoers.d/*`.
+    pub fn collect_sudoers_nopasswd<FS: FileSystem>(fs: &FS) -> Vec<String> {
+        let mut users = Vec::new();
+        if fs.exists("/etc/sudoers") {
+            if let Ok(content) = fs.read_to_string("/etc/sudoers") {
+                Self::parse_sudoers_nopasswd_content(&content, &mut users);
+            }
+        }
+        if fs.exists("/etc/sudoers.d") {
+            if let Ok(entries) = fs.read_dir("/etc/sudoers.d") {
+                for entry in entries {
+                    if let Some(filename) = entry.rsplit('/').next() {
+                        if filename.starts_with('.') || filename.ends_with('~') {
+                            continue;
+                        }
+                    }
+                    if let Ok(content) = fs.read_to_string(&entry) {
+                        Self::parse_sudoers_nopasswd_content(&content, &mut users);
+                    }
+                }
+            }
+        }
+        users.sort();
+        users
     }
 
     /// Parses `/etc/passwd` formatted text.
@@ -109,9 +196,24 @@ impl UsersInfo {
             });
         }
 
+        let interactive_service_accounts = accounts
+            .iter()
+            .filter(|u| {
+                u.uid > 0
+                    && u.uid < 1000
+                    && !u.shell.ends_with("nologin")
+                    && !u.shell.ends_with("false")
+                    && !u.shell.is_empty()
+            })
+            .map(|u| u.username.clone())
+            .collect();
+
         Ok(Self {
             accounts,
             empty_password_accounts: Vec::new(),
+            sudo_group_members: Vec::new(),
+            nopasswd_sudo_users: Vec::new(),
+            interactive_service_accounts,
         })
     }
 
@@ -160,5 +262,44 @@ nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
         let interactive = users.interactive_accounts();
         assert_eq!(interactive.len(), 1);
         assert_eq!(interactive[0].username, "alice");
+    }
+
+    #[test]
+    fn test_interactive_service_accounts() {
+        let sample = r"
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/bin/bash
+alice:x:1000:1000:Alice:/home/alice:/bin/bash
+";
+        let users = UsersInfo::parse(sample).expect("valid parse");
+        assert_eq!(users.interactive_service_accounts, vec!["www-data"]);
+    }
+
+    #[test]
+    fn test_parse_group_sudo_members() {
+        let sample = r"
+root:x:0:
+daemon:x:1:
+sudo:x:27:alice,bob
+wheel:x:999:charlie
+";
+        let members = UsersInfo::parse_group_sudo_members(sample);
+        assert_eq!(members, vec!["alice", "bob", "charlie"]);
+    }
+
+    #[test]
+    fn test_parse_sudoers_nopasswd() {
+        let sample = r"
+# Defaults
+Defaults env_reset
+root ALL=(ALL:ALL) ALL
+%sudo ALL=(ALL:ALL) ALL
+alice ALL=(ALL) NOPASSWD:ALL
+bob ALL=(ALL) NOPASSWD: /usr/bin/apt
+";
+        let mut users = Vec::new();
+        UsersInfo::parse_sudoers_nopasswd_content(sample, &mut users);
+        assert_eq!(users, vec!["alice", "bob"]);
     }
 }
