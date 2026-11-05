@@ -32,6 +32,18 @@ macro_rules! define_id {
                 Self(uuid)
             }
 
+            /// Generates a deterministic identifier from seed bytes using SHA-256.
+            #[must_use]
+            pub fn from_seed(seed: &[u8]) -> Self {
+                use sha2::{Digest, Sha256};
+                let hash = Sha256::digest(seed);
+                let mut bytes = [0u8; 16];
+                bytes.copy_from_slice(&hash[..16]);
+                bytes[6] = (bytes[6] & 0x0f) | 0x50;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                Self(Uuid::from_bytes(bytes))
+            }
+
             /// Returns a reference to the inner [`Uuid`].
             #[must_use]
             pub const fn as_uuid(&self) -> &Uuid {
@@ -115,6 +127,16 @@ mod tests {
         let id1 = AssetId::new();
         let id2 = AssetId::new();
         assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_id_deterministic_from_seed() {
+        let seed = b"machine-12345:production";
+        let id1 = AssetId::from_seed(seed);
+        let id2 = AssetId::from_seed(seed);
+        let id3 = AssetId::from_seed(b"different-seed");
+        assert_eq!(id1, id2);
+        assert_ne!(id1, id3);
     }
 
     #[test]
