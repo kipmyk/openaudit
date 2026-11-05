@@ -14,7 +14,9 @@ pub enum DomainError {
     EmptyField(&'static str),
 
     /// A string field exceeded its maximum permitted length.
-    #[error("field '{field}' exceeds maximum length of {max_length} characters (got {actual_length})")]
+    #[error(
+        "field '{field}' exceeds maximum length of {max_length} characters (got {actual_length})"
+    )]
     FieldTooLong {
         /// Name of the field.
         field: &'static str,
@@ -58,7 +60,10 @@ mod tests {
     #[test]
     fn test_error_display_formatting() {
         let err = DomainError::EmptyField("target_address");
-        assert_eq!(err.to_string(), "required field 'target_address' cannot be empty");
+        assert_eq!(
+            err.to_string(),
+            "required field 'target_address' cannot be empty"
+        );
 
         let err = DomainError::FieldTooLong {
             field: "name",
