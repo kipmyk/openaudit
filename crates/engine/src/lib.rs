@@ -8,8 +8,10 @@
 
 #![doc(html_root_url = "https://docs.rs/openaudit-engine/0.1.0-alpha.0")]
 
+pub mod collector;
 pub mod error;
 
+pub use collector::{HostInspectionContext, PrivilegeLevel};
 pub use error::EngineError;
 
 /// Returns the current version of the OpenAudit inspection engine.
