@@ -80,3 +80,16 @@ jobs:
 
       - name: Check documentation
         run: cargo doc --workspace --no-deps
+
+  audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Run Cargo Audit
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
