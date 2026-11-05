@@ -4,6 +4,20 @@ use crate::collector::FileSystem;
 use crate::error::EngineError;
 use serde::{Deserialize, Serialize};
 
+pub const INTERACTIVE_SHELLS: &[&str] = &[
+    "/bin/sh",
+    "/bin/bash",
+    "/bin/zsh",
+    "/bin/dash",
+    "/bin/ksh",
+    "/bin/csh",
+    "/bin/tcsh",
+    "/usr/bin/sh",
+    "/usr/bin/bash",
+    "/usr/bin/zsh",
+    "/usr/bin/dash",
+];
+
 /// Represents an account entry parsed from `/etc/passwd`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAccount {
@@ -198,13 +212,7 @@ impl UsersInfo {
 
         let interactive_service_accounts = accounts
             .iter()
-            .filter(|u| {
-                u.uid > 0
-                    && u.uid < 1000
-                    && !u.shell.ends_with("nologin")
-                    && !u.shell.ends_with("false")
-                    && !u.shell.is_empty()
-            })
+            .filter(|u| u.uid > 0 && u.uid < 1000 && INTERACTIVE_SHELLS.contains(&u.shell.as_str()))
             .map(|u| u.username.clone())
             .collect();
 
