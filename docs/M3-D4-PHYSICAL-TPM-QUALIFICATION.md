@@ -60,3 +60,4 @@ To execute physical qualification, the target system must satisfy:
 - **Emulation Evidence:** Fully verified (204+ workspace tests passing against live `swtpm 0.10.2_1` daemons).
 - **Physical Hardware Gating:** Bare-metal Linux host with physical TPM 2.0 character device `/dev/tpmrm0` is required for physical silicon ratification.
 - **Disposition:** Marked as **`BLOCKED`** until physical hardware bench testing is conducted in staging.
+
