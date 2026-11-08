@@ -64,16 +64,16 @@ cross_binary_attestation_e2e (integration)                   1         0        
 d4_attestation_e2e (integration)                             7         0        0
 domain_workflow (integration)                                6         0        0
 linux_tpm_device_and_udev (integration)                      5         0        0
-tls_transport_integration (integration)                     8         0        0
+tls_transport_integration (integration)                    11         0        0
 ---------------------------------------------------------------------------------
-Workspace Total Passed:                                    215         0        0
+Workspace Total Passed:                                    218         0        0
 Frozen Harness (/tmp/d4_subject_bound_authority_remediation)50         0        0
 ---------------------------------------------------------------------------------
-Grand Total Test Executions:                                265         0        0
+Grand Total Test Executions:                                268         0        0
 ```
 
-All 265 tests pass with zero warnings in `cargo clippy --workspace --all-targets -- -D warnings` and pristine `cargo fmt -- --check`.  
-The frozen remediation harness SHA-256 remains unmodified:  
+All 268 tests pass with zero warnings in `cargo clippy --workspace --all-targets -- -D warnings` and pristine `cargo fmt -- --check`.
+The frozen remediation harness SHA-256 remains unmodified:
 `69148e8cb50d7a9a10caadcd42286a112d086b426b03199ff718ccc1f6865ad9`.
 
 ---
@@ -83,7 +83,7 @@ The frozen remediation harness SHA-256 remains unmodified:
 With intellectual honesty and adherence to rigorous engineering governance, the following boundaries are formally recorded:
 
 1. **TLS 1.3 Transport Channel Acceptance:**
-   Pure TLS 1.3 transport is fully implemented in `openaudit-core` using `rustls 0.23` (Ring crypto provider) with TLS 1.2 negotiation disabled at the compiler and protocol layer. Handshake enforcement, certificate chain validation, hostname authentication, mode 0600 private key protection, replay rejection, and cross-binary server/agent TLS workflows are verified by 8 passing integration tests. **Status: ACCEPTED.**
+   Pure TLS 1.3 transport is fully implemented in `openaudit-core` using `rustls 0.23` (Ring crypto provider) with TLS 1.2 negotiation disabled at the compiler and protocol layer. Handshake enforcement, certificate chain validation, hostname authentication, mode 0600/0400 private key protection, regular file type verification, replay rejection, framing error handling, and complete cross-binary server/agent TLS workflows with server restart and persistent DB validation are verified by 11 passing integration tests. **Status: ACCEPTED.**
 2. **Physical TPM Hardware Gating:**
    All cryptographic operations, NV space creation, policy digest derivations, and monotonic counter increments have been verified live against `swtpm 0.10.2_1`. Direct execution against physical discrete/firmware TPM hardware nodes (`/dev/tpmrm0`) has a reproducible qualification harness (`scripts/qualify_physical_tpm.sh`), but remains **BLOCKED** on the current macOS development host due to the absence of bare-metal Linux TPM silicon.
 3. **Physical Power-Loss Qualification:**

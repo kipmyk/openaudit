@@ -83,12 +83,12 @@ cross_binary_attestation_e2e integration suite                      1         0 
 d4_attestation_e2e integration suite                                7         0        0
 domain_workflow integration suite                                   6         0        0
 linux_tpm_device_and_udev integration suite                         5         0        0
-tls_transport_integration suite                                     8         0        0
+tls_transport_integration suite                                    11         0        0
 ----------------------------------------------------------------------------------------
-Local Workspace Passing Tests:                                    215         0        0
+Local Workspace Passing Tests:                                    218         0        0
 Frozen Specification Remediation Harness:                          50         0        0
 ----------------------------------------------------------------------------------------
-Grand Total Passing Test Suite:                                   265         0        0
+Grand Total Passing Test Suite:                                   268         0        0
 ```
 
 - **Clippy:** Passing with zero warnings (`cargo clippy --workspace --all-targets -- -D warnings`).
@@ -103,7 +103,7 @@ To preserve uncompromising engineering governance and scientific veracity, the f
 
 | Area | Status | Evidence & Resolution |
 | :--- | :---: | :--- |
-| **Pure TLS 1.3 Transport** | **`ACCEPTED`** | Pure TLS 1.3 transport engine implemented with `rustls 0.23` (no TLS 1.2 negotiation enabled or supported). Verified across 8 integration tests including downgrade rejection, certificate expiration, hostname verification, mode 0600 keys, and cross-binary client/server workflows. |
+| **Pure TLS 1.3 Transport** | **`ACCEPTED`** | Pure TLS 1.3 transport engine implemented with `rustls 0.23` (no TLS 1.2 negotiation enabled or supported). Verified across 11 integration tests including downgrade rejection, certificate expiration, hostname verification, mode 0600/0400 keys, regular file enforcement, replay rejection, framing error handling, and cross-binary client/server workflows. |
 | **Physical TPM 2.0 Silicon** | **`BLOCKED`** | All Part 3 wire operations, NV counter increments, policy digests, and 4-state lifecycle verified live against `swtpm 0.10.2_1`. Reproducible physical qualification script (`scripts/qualify_physical_tpm.sh`) created. Blocked on development host pending bare-metal Linux hardware testing. |
 | **Physical Power-Loss Recovery** | **`BLOCKED`** | Crash resilience and rollback verified across all CB-01..13 permutations and SQLite WAL uncommitted transactions. Reproducible physical testbench procedure (`scripts/qualify_power_loss.sh`) created. Blocked pending laboratory power-interrupter testbench. |
 | **External Security Review** | **`PENDING`** | Comprehensive security assessment package prepared in `docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md` with threat model, review checklist, and reproduction guide. Awaiting external independent evaluation. |
