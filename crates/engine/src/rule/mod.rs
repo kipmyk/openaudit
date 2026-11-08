@@ -1,6 +1,29 @@
 //! Rule evaluation engine and security rule traits.
 
 pub mod builtin;
+pub mod windows;
+
+pub use builtin::default_linux_rules;
+pub use windows::default_windows_rules;
+
+/// Returns all built-in rules across supported platforms.
+#[must_use]
+pub fn all_builtin_rules() -> Vec<Box<dyn Rule>> {
+    let mut rules = default_linux_rules();
+    rules.extend(default_windows_rules());
+    rules
+}
+
+/// Returns standard built-in rules for the specified platform family.
+#[must_use]
+pub fn default_rules_for_platform(family: PlatformFamily) -> Vec<Box<dyn Rule>> {
+    match family {
+        PlatformFamily::Windows => default_windows_rules(),
+        PlatformFamily::Linux | PlatformFamily::MacOS | PlatformFamily::Unknown => {
+            default_linux_rules()
+        }
+    }
+}
 
 use crate::collector::{HostInspectionContext, PrivilegeLevel};
 use crate::platform::{PlatformCapability, PlatformFamily};
