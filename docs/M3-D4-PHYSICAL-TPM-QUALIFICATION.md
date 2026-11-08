@@ -2,7 +2,7 @@
 
 **Specification Reference:** D4 Architecture Specification v1.24 §7.1, §8, §11.1  
 **Qualification Status:** **`BLOCKED (Awaiting Bare-Metal Linux Physical TPM 2.0 Hardware)`**  
-**Evidentiary Integrity Notice:** In conformance with fellowship governance mandates, OpenAudit explicitly separates software TPM execution (`swtpm 0.10.2_1`) from physical silicon qualification. Software emulation must never be labeled or represented as physical hardware qualification.
+**Evidentiary Integrity Notice:** In conformance with evidentiary governance mandates, OpenAudit explicitly separates software TPM execution (`swtpm 0.10.2_1`) from physical silicon qualification. Software emulation must never be labeled or represented as physical hardware qualification.
 
 ---
 

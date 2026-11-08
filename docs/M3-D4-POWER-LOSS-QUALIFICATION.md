@@ -2,7 +2,7 @@
 
 **Specification Reference:** D4 Architecture Specification v1.24 §6.1, §6.2, §11.1  
 **Qualification Status:** **`BLOCKED (Awaiting Hardware Power-Cut Laboratory Testbench)`**  
-**Evidentiary Integrity Notice:** Simulated crash recovery, process interruptions, and uncommitted journal rollbacks (CB-01 through CB-13) are fully proven in software integration tests. However, in accordance with fellowship standards, qualification under raw non-volatile hardware storage controller power cuts must remain designated as `BLOCKED` until tested on physical hardware.
+**Evidentiary Integrity Notice:** Simulated crash recovery, process interruptions, and uncommitted journal rollbacks (CB-01 through CB-13) are fully proven in software integration tests. However, in accordance with rigorous evidentiary standards, qualification under raw non-volatile hardware storage controller power cuts must remain designated as `BLOCKED` until tested on physical hardware.
 
 ---
 

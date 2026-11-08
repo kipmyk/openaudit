@@ -55,7 +55,7 @@ Milestone M3 is actively in progress. As part of M3, the **D4 Deliverable (Subje
 - **Outstanding Qualifications (Hardware & External Audit):**
   1. *Physical TPM 2.0 Hardware Qualification:* Validated against `swtpm` emulation; qualification on physical discrete/firmware TPM hardware (`/dev/tpmrm0`) remains pending execution on physical Linux hardware using `scripts/qualify_physical_tpm.sh`. Emulator testing does not constitute physical TPM hardware qualification.
   2. *Controlled Physical Power-Loss Bench Testing:* Validated via software crash-recovery matrices (CB-01..13) and atomic WAL rollback testing; qualification on physical hardware with abrupt relay bench power severance remains pending execution using `scripts/qualify_power_loss.sh`.
-  3. *Independent External Security Assessment:* Internal threat models, cryptographic bounds, and security review handoff packages are prepared in `docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md` and `docs/M3-D4-REVIEWER-HANDOFF.md`; independent third-party penetration testing and formal code audit remain pending external review.
+  3. *Independent External Security Assessment:* Internal threat models, cryptographic bounds, and security review handoff procedures are summarized in `docs/M3-D4-FINAL-ACCEPTANCE-REPORT.md` and `docs/THREAT-MODEL.md`; independent third-party penetration testing and formal code audit remain pending external review.
 
 Completion of the D4 security workstream does not constitute full M3 acceptance. Milestone M3 remains open until all original cross-platform abstraction and multi-distribution validation criteria (Linux, macOS, Windows) are satisfied.
 
@@ -149,8 +149,8 @@ cargo test
 - [Architecture Design & Technical Decisions](docs/ARCHITECTURE.md)
 - [Threat Model & Security Boundaries](docs/THREAT-MODEL.md)
 - [PostgreSQL Multi-Tenant Data Model](docs/DATA-MODEL.md)
-- [Landscape Research & Project Positioning](docs/RESEARCH.md)
-- [Milestone Development Roadmap](docs/ROADMAP.md)
+- [CLI Contracts & Command Reference](docs/CLI-CONTRACTS.md)
+- [Public Milestone Development Roadmap](docs/ROADMAP.md)
 
 ### Milestone M2 Reports & Evidence
 - [M2 Detection Lab Baseline Report](docs/M2-BASELINE-REPORT.md)

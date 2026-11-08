@@ -2,7 +2,7 @@
 
 **Dimension:** Dimension 4 — Subject-Bound Authority & Rollback Protection  
 **Status:** **`ACCEPTED WITH QUALIFICATIONS`**  
-**Milestone:** Milestone 3 (Mozilla Technology Fellowship Track II: Independent Fellow)  
+**Milestone:** Milestone 3 Dimension 4 (Subject-Bound Authority & Rollback Protection)  
 **Baseline Invariants:** Milestone 2 (`v0.2.0-m2`) FROZEN; Dimensions 1, 2, and 3 RATIFIED and CLOSED.  
 **Frozen Harness Reference:** `/tmp/d4_subject_bound_authority_remediation` (SHA-256: `69148e8cb50d7a9a10caadcd42286a112d086b426b03199ff718ccc1f6865ad9` — UNMODIFIED).  
 **Repository State:** Local Git branch `main`, clean working tree, zero remote operations/pushes/tags/releases.
@@ -23,7 +23,7 @@ Dimension 4 of OpenAudit Milestone 3 establishes end-to-end hardware-anchored su
 9. **Linux Device Handling & Production Udev Policy:** Automatic resolution of `/dev/tpmrm0` with `/dev/tpm0` fallback, character device file-type verification, actionable diagnostics for missing kernel drivers or permissions, and production udev rules (`packaging/udev/99-openaudit-tpm.rules`) enforcing mode `0660` for group `openaudit` and strictly prohibiting world-writable permissions.
 10. **Strict TLS 1.3 Transport Implementation:** Pure TLS 1.3 network transport built with `rustls 0.23` (Ring provider) with TLS 1.2 negotiation unconditionally disabled and rejected. Full certificate chain validation, hostname / SAN verification, length-prefixed framing, protected mode `0600` private key handling, and 8 comprehensive integration tests covering successful handshakes, downgrade rejection, expired certificates, hostname mismatches, untrusted CAs, insecure key permissions, cross-binary TLS enrollment/retrieval, and transport-level replay detection.
 11. **Reproducible Hardware Qualification Testbenches:** Executable qualification harnesses for physical Linux TPM 2.0 silicon (`scripts/qualify_physical_tpm.sh` and `docs/M3-D4-PHYSICAL-TPM-QUALIFICATION.md`) and physical storage controller power-loss testing (`scripts/qualify_power_loss.sh` and `docs/M3-D4-POWER-LOSS-QUALIFICATION.md`).
-12. **Auditor-Ready Security Assessment Package:** Complete evaluation package (`docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md`) including threat model, review checklist, architectural blueprints, and step-by-step reproduction instructions for independent third-party assessors.
+12. **Auditor-Ready Security Assessment Package:** Evaluation package prepared including threat model, review checklist, architectural blueprints, and step-by-step reproduction instructions for independent third-party assessors.
 
 ---
 
@@ -106,13 +106,13 @@ To preserve uncompromising engineering governance and scientific veracity, the f
 | **Pure TLS 1.3 Transport** | **`ACCEPTED`** | Pure TLS 1.3 transport engine implemented with `rustls 0.23` (no TLS 1.2 negotiation enabled or supported). Verified across 11 integration tests including downgrade rejection, certificate expiration, hostname verification, mode 0600/0400 keys, regular file enforcement, replay rejection, framing error handling, and cross-binary client/server workflows. |
 | **Physical TPM 2.0 Silicon** | **`BLOCKED`** | All Part 3 wire operations, NV counter increments, policy digests, and 4-state lifecycle verified live against `swtpm 0.10.2_1`. Reproducible physical qualification script (`scripts/qualify_physical_tpm.sh`) created. Blocked on development host pending bare-metal Linux hardware testing. |
 | **Physical Power-Loss Recovery** | **`BLOCKED`** | Crash resilience and rollback verified across all CB-01..13 permutations and SQLite WAL uncommitted transactions. Reproducible physical testbench procedure (`scripts/qualify_power_loss.sh`) created. Blocked pending laboratory power-interrupter testbench. |
-| **External Security Review** | **`PENDING`** | Comprehensive security assessment package prepared in `docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md` with threat model, review checklist, and reproduction guide. Awaiting external independent evaluation. |
+| **External Security Review** | **`PENDING`** | Comprehensive security assessment package prepared with threat model, review checklist, and reproduction guide. Awaiting external independent evaluation. |
 
 ---
 
 ## 5. Formal Ratification & Closure Statement
 
-The implementation, integration, testing, packaging, and architectural mandates of **Milestone 3 Dimension 4 (Subject-Bound Authority & Rollback Protection)** have been executed, verified, and committed locally in strict conformance with OpenAudit specifications and fellowship governance policies.
+The implementation, integration, testing, packaging, and architectural mandates of **Milestone 3 Dimension 4 (Subject-Bound Authority & Rollback Protection)** have been executed, verified, and committed locally in strict conformance with OpenAudit specifications and engineering governance policies.
 
 In accordance with the evidence record and the explicit boundaries above, Dimension 4 is hereby **`ACCEPTED WITH QUALIFICATIONS`**.
 

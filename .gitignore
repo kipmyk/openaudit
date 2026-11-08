@@ -26,6 +26,10 @@ Thumbs.db
 id_rsa
 id_ed25519
 
+# Private documentation & planning
+private/
+*.private.md
+
 # Test, scratch, and coverage artifacts
 /coverage/
 *.lcov

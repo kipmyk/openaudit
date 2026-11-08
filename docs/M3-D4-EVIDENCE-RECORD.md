@@ -44,7 +44,7 @@ The evidence matrix classifies the verification status of each normative require
 | **REQ-D4-19** | Pure TLS 1.3 Transport Channel Acceptance | Spec §7.3 | `crates/core/src/protocol/tls.rs`<br/>`crates/core/tests/tls_transport_integration.rs` | Strict TLS 1.3 enforcement, rejection of TLS 1.2 downgrades, certificate chain validation, hostname authentication, mode 0600 keys, 8 passing tests | **SPECIFIED**, **IMPLEMENTED**, **TLS 1.3 VERIFIED** |
 | **REQ-D4-20** | Physical TPM Character Device Qualification | Spec §11.1 | `scripts/qualify_physical_tpm.sh`<br/>`docs/M3-D4-PHYSICAL-TPM-QUALIFICATION.md` | Reproducible bare-metal qualification script ready. Awaiting physical Linux TPM 2.0 silicon | **SPECIFIED**, **BLOCKED (PHYSICAL TPM)** |
 | **REQ-D4-21** | Physical Power-Loss Recovery Qualification | Spec §11.1 | `scripts/qualify_power_loss.sh`<br/>`docs/M3-D4-POWER-LOSS-QUALIFICATION.md` | Reproducible test procedure ready. Awaiting physical power-interruption testbench rig | **SPECIFIED**, **BLOCKED (POWER LOSS)** |
-| **REQ-D4-22** | Independent External Security Review | Spec §11.1 | `docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md` | Assessment package complete with threat model, checklist, and reproduction guide | **SPECIFIED**, **PENDING (EXTERNAL REVIEW)** |
+| **REQ-D4-22** | Independent External Security Review | Spec §11.1 | Security assessment package (Controlled Storage) | Assessment package complete with threat model, checklist, and reproduction guide | **SPECIFIED**, **PENDING (EXTERNAL REVIEW)** |
 
 ---
 
@@ -89,4 +89,4 @@ With intellectual honesty and adherence to rigorous engineering governance, the 
 3. **Physical Power-Loss Qualification:**
    Filesystem crash recovery has been thoroughly validated using simulated process interruptions, missing candidate states, uncommitted WAL files, and advisory lock lifecycle cleanups (CB-01 through CB-13). Qualification against abrupt non-volatile flash power cut has a reproducible procedure (`scripts/qualify_power_loss.sh`), but remains **BLOCKED** pending a laboratory testbench with automated relay power cuts.
 4. **Independent External Security Review:**
-   A complete audit package has been compiled in `docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md` with threat model, review checklist, and reproduction steps. Status is **PENDING** external third-party evaluation.
+   A complete audit package has been compiled with threat model, review checklist, and reproduction steps. Status is **PENDING** external third-party evaluation.
