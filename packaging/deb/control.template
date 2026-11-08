@@ -1,0 +1,13 @@
+Package: openaudit
+Version: {{VERSION}}
+Section: admin
+Priority: optional
+Architecture: {{ARCH}}
+Depends: libc6 (>= 2.34), libgcc-s1
+Maintainer: OpenAudit Contributors <security@openaudit.org>
+Description: High-integrity systems posture evaluation and host auditing engine
+ OpenAudit evaluates host configuration against security baselines,
+ verifying kernel hardening, filesystem permissions, authentication
+ controls, and network exposure. Standalone CLI requires zero runtime
+ dependencies or development toolchains.
+Homepage: https://github.com/kipmyk/openaudit

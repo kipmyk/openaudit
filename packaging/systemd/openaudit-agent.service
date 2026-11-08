@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenAudit Host Security Auditing Agent
+Documentation=https://github.com/kipmyk/openaudit
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/openaudit-agent
+Restart=on-failure
+RestartSec=10s
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenAudit Control Plane Server
+Documentation=https://github.com/kipmyk/openaudit
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/openaudit-server
+Restart=on-failure
+RestartSec=5s
+StateDirectory=openaudit
+RuntimeDirectory=openaudit
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
