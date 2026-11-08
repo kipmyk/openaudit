@@ -1,0 +1,22 @@
+# OpenAudit TPM 2.0 Device Permissions (M3 D4 Production Deployment)
+#
+# Provides least-privilege access to the TPM 2.0 in-kernel resource manager (/dev/tpmrm*)
+# and raw hardware TPM character devices (/dev/tpm*) for the OpenAudit service daemon.
+#
+# SECURITY MANDATE:
+# 1. Mode MUST be 0660 (owner/group read-write only).
+# 2. World-writable permissions (0666, 0664, 0777) are STRICTLY PROHIBITED to prevent
+#    unauthorized local processes from reading NV state, manipulating authorization
+#    sessions, or incrementing monotonic rollback protection counters.
+# 3. Ownership is granted to group 'openaudit' (or standard system 'tss' group).
+
+# In-kernel TPM 2.0 Resource Manager (Recommended for multi-process concurrent access)
+KERNEL=="tpmrm[0-9]*", SUBSYSTEM=="tpmrm", OWNER="root", GROUP="openaudit", MODE="0660", TAG+="openaudit", TAG+="systemd"
+KERNEL=="tpmrm[0-9]*", SUBSYSTEM=="tpm", OWNER="root", GROUP="openaudit", MODE="0660", TAG+="openaudit", TAG+="systemd"
+
+# Raw Hardware TPM 2.0 Character Device (Single-client fallback)
+KERNEL=="tpm[0-9]*", SUBSYSTEM=="tpm", OWNER="root", GROUP="openaudit", MODE="0660", TAG+="openaudit", TAG+="systemd"
+
+# Optional distribution fallback rule for systems with standard 'tss' group:
+# KERNEL=="tpmrm[0-9]*", SUBSYSTEM=="tpmrm", OWNER="root", GROUP="tss", MODE="0660", TAG+="openaudit", TAG+="systemd"
+# KERNEL=="tpm[0-9]*", SUBSYSTEM=="tpm", OWNER="root", GROUP="tss", MODE="0660", TAG+="openaudit", TAG+="systemd"
