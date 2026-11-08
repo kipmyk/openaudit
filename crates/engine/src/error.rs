@@ -37,6 +37,18 @@ pub enum EngineError {
     #[error("insufficient privilege to perform check: {0}")]
     InsufficientPrivilege(String),
 
+    /// The target platform or operating system is unsupported.
+    #[error("unsupported platform: {0}")]
+    UnsupportedPlatform(String),
+
+    /// The target distribution or version is unsupported.
+    #[error("unsupported distribution: {0}")]
+    UnsupportedDistribution(String),
+
+    /// A required platform capability is missing on this host.
+    #[error("missing platform capability: {0}")]
+    MissingCapability(String),
+
     /// An error originated in the core domain models.
     #[error("domain error: {0}")]
     Core(#[from] DomainError),
@@ -61,6 +73,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "collected output exceeded maximum size limit: 600000 bytes (max: 524288 bytes)"
+        );
+
+        let err = EngineError::UnsupportedPlatform("freebsd".into());
+        assert_eq!(err.to_string(), "unsupported platform: freebsd");
+
+        let err = EngineError::UnsupportedDistribution("archlinux".into());
+        assert_eq!(err.to_string(), "unsupported distribution: archlinux");
+
+        let err = EngineError::MissingCapability("kernel_sysctl".into());
+        assert_eq!(
+            err.to_string(),
+            "missing platform capability: kernel_sysctl"
         );
     }
 }

@@ -7,20 +7,16 @@ use openaudit_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::collector::env::EnvInfo;
-use crate::collector::firewall::FirewallInfo;
 use crate::collector::os::OsInfo;
-use crate::collector::permissions::FilePermissionInfo;
-use crate::collector::ports::{ListeningPort, ListeningUdpPort};
-use crate::collector::ssh::SshConfig;
-use crate::collector::suid::SuidBinaryCollector;
-use crate::collector::sysctl::SysctlInfo;
-use crate::collector::users::UsersInfo;
 use crate::collector::{
-    CommandRunner, FileSystem, HostInspectionContext, PrivilegeLevel, RealCommandRunner,
-    RealFileSystem,
+    CommandRunner, FileSystem, PrivilegeLevel, RealCommandRunner, RealFileSystem,
 };
 use crate::error::EngineError;
+use crate::platform::{
+    detect_current_platform, CheckExecutionStatus, CheckStatusRecord, PlatformBackend,
+    PlatformFamily, PlatformInfo,
+};
+use crate::profile::AuditProfile;
 use crate::rule::builtin::default_linux_rules;
 use crate::rule::Rule;
 
@@ -42,10 +38,16 @@ pub struct AuditReport {
     pub asset: Asset,
     /// Operating system identification.
     pub os_info: Option<OsInfo>,
+    /// Platform metadata and capabilities inventory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_info: Option<PlatformInfo>,
     /// Execution privilege level of the audit process.
     pub current_privilege: PrivilegeLevel,
     /// Detected security findings.
     pub findings: Vec<AuditFindingItem>,
+    /// Detailed status records for evaluated, unsupported, or skipped rules.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub check_statuses: Vec<CheckStatusRecord>,
     /// Statistical aggregation of findings by severity.
     pub summary: ScanSummary,
     /// Execution duration in milliseconds.
@@ -79,79 +81,155 @@ impl Default for AuditEngine<RealFileSystem, RealCommandRunner> {
     }
 }
 
-impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
+impl<FS: FileSystem + Clone + 'static, CR: CommandRunner + Clone + 'static> AuditEngine<FS, CR> {
     /// Creates a new `AuditEngine` with custom filesystem and command runner providers.
     #[must_use]
     pub fn new(fs: FS, runner: CR, rules: Vec<Box<dyn Rule>>) -> Self {
         Self { fs, runner, rules }
     }
 
-    /// Executes a full, read-only local host security posture audit.
+    /// Returns a slice of configured rules.
+    #[must_use]
+    pub fn rules(&self) -> &[Box<dyn Rule>] {
+        &self.rules
+    }
+
+    /// Executes a full, read-only local host security posture audit with baseline profile.
     ///
     /// # Errors
     /// Returns an [`EngineError`] if asset initialization or core domain validation fails.
     pub fn run_local_audit(&self, org_id: OrganizationId) -> Result<AuditReport, EngineError> {
+        self.run_audit_with_profile(org_id, AuditProfile::Baseline)
+    }
+
+    /// Executes a local host security audit matching a specific profile.
+    ///
+    /// # Errors
+    /// Returns an [`EngineError`] if asset initialization or core domain validation fails.
+    pub fn run_audit_with_profile(
+        &self,
+        org_id: OrganizationId,
+        profile: AuditProfile,
+    ) -> Result<AuditReport, EngineError> {
+        let backend = detect_current_platform(&self.fs, &self.runner);
+        self.run_audit_with_backend(org_id, backend.as_ref(), profile)
+    }
+
+    /// Executes an audit using an explicitly provided platform backend and profile.
+    ///
+    /// # Errors
+    /// Returns an [`EngineError`] if telemetry collection, asset initialization, or domain validation fails.
+    #[allow(clippy::too_many_lines)]
+    pub fn run_audit_with_backend(
+        &self,
+        org_id: OrganizationId,
+        backend: &dyn PlatformBackend,
+        profile: AuditProfile,
+    ) -> Result<AuditReport, EngineError> {
         let start_time = Instant::now();
 
-        // 1. Collect telemetry
-        let os_info = OsInfo::collect(&self.fs).ok();
-        let ssh_config = SshConfig::collect(&self.fs).ok();
-        let users_info = UsersInfo::collect(&self.fs).ok();
-        let listening_ports = ListeningPort::collect(&self.fs).unwrap_or_default();
-        let firewall_info = Some(FirewallInfo::collect(&self.runner));
-        let file_permissions = FilePermissionInfo::collect_critical(&self.fs).unwrap_or_default();
-        let udp_ports = ListeningUdpPort::collect(&self.fs).unwrap_or_default();
-        let suid_binaries = SuidBinaryCollector::collect(&self.fs);
-        let sysctl = Some(SysctlInfo::collect(&self.fs));
-        let path_entries = EnvInfo::collect(&self.fs).path_entries;
-        let current_privilege = PrivilegeLevel::current();
-
-        let context = HostInspectionContext {
-            os: os_info.clone(),
-            ssh: ssh_config,
-            users: users_info,
-            listening_ports,
-            firewall: firewall_info,
-            file_permissions,
-            udp_ports,
-            suid_binaries,
-            sysctl,
-            path_entries,
-            current_privilege,
-        };
+        // 1. Collect telemetry from platform backend
+        let context = backend.collect_context()?;
+        let platform_info = backend.info().clone();
+        let os_info = context.os.clone();
+        let current_privilege = context.current_privilege;
 
         // 2. Synthesize Asset representation
-        let host_name = os_info
-            .as_ref()
-            .map_or("localhost", |os| os.pretty_name.as_str());
+        let asset_type = match platform_info.family {
+            PlatformFamily::Windows => AssetType::WindowsHost,
+            PlatformFamily::MacOS => AssetType::MacosHost,
+            PlatformFamily::Linux | PlatformFamily::Unknown => AssetType::LinuxHost,
+        };
+
+        let host_name = os_info.as_ref().map_or_else(
+            || platform_info.pretty_name.as_str(),
+            |os| os.pretty_name.as_str(),
+        );
 
         let asset_seed = os_info
             .as_ref()
             .and_then(|os| os.machine_id.as_deref())
+            .or(platform_info.machine_id.as_deref())
             .map_or_else(
                 || format!("{org_id}:{host_name}"),
                 |mid| format!("{org_id}:{mid}"),
             );
 
         let asset_id = AssetId::from_seed(asset_seed.as_bytes());
-        let asset = Asset::with_id(
-            asset_id,
-            org_id,
-            host_name,
-            AssetType::LinuxHost,
-            "127.0.0.1",
-        )?;
+        let asset = Asset::with_id(asset_id, org_id, host_name, asset_type, "127.0.0.1")?;
 
         // 3. Evaluate rules
         let mut finding_items = Vec::new();
+        let mut check_statuses = Vec::new();
         let mut summary = ScanSummary::default();
 
         for rule in &self.rules {
-            if rule.required_privilege() > current_privilege {
+            let rule_id = rule.id();
+
+            // Profile filtering: if baseline profile, skip hardened-only rules
+            if profile == AuditProfile::Baseline && rule.profile() == AuditProfile::Hardened {
+                check_statuses.push(CheckStatusRecord {
+                    rule_id: rule_id.to_string(),
+                    status: CheckExecutionStatus::NotApplicable {
+                        reason: "Excluded by baseline audit profile".to_string(),
+                    },
+                });
                 continue;
             }
 
-            for rule_finding in rule.evaluate(&context) {
+            // Platform applicability check
+            if !rule.target_platforms().contains(&platform_info.family) {
+                check_statuses.push(CheckStatusRecord {
+                    rule_id: rule_id.to_string(),
+                    status: CheckExecutionStatus::UnsupportedPlatform {
+                        platform: platform_info.family,
+                        reason: format!("Rule only applies to: {:?}", rule.target_platforms()),
+                    },
+                });
+                continue;
+            }
+
+            // Platform capability check
+            let mut missing_cap = None;
+            for cap in rule.required_capabilities() {
+                if !backend.has_capability(*cap) {
+                    missing_cap = Some(*cap);
+                    break;
+                }
+            }
+
+            if let Some(cap) = missing_cap {
+                check_statuses.push(CheckStatusRecord {
+                    rule_id: rule_id.to_string(),
+                    status: CheckExecutionStatus::MissingCapability {
+                        capability: cap,
+                        reason: format!("Host platform lacks required capability: {cap}"),
+                    },
+                });
+                continue;
+            }
+
+            // Privilege check
+            if rule.required_privilege() > current_privilege {
+                check_statuses.push(CheckStatusRecord {
+                    rule_id: rule_id.to_string(),
+                    status: CheckExecutionStatus::InsufficientPrivilege {
+                        required: rule.required_privilege(),
+                        current: current_privilege,
+                    },
+                });
+                continue;
+            }
+
+            // Execute rule
+            let rule_findings = rule.evaluate(&context);
+            let passed = rule_findings.is_empty();
+            check_statuses.push(CheckStatusRecord {
+                rule_id: rule_id.to_string(),
+                status: CheckExecutionStatus::Executed { passed },
+            });
+
+            for rule_finding in rule_findings {
                 let finding = Finding::new(
                     org_id,
                     asset.id,
@@ -181,8 +259,10 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
         Ok(AuditReport {
             asset,
             os_info,
+            platform_info: Some(platform_info),
             current_privilege,
             findings: finding_items,
+            check_statuses,
             summary,
             duration_ms,
         })
@@ -193,6 +273,7 @@ impl<FS: FileSystem, CR: CommandRunner> AuditEngine<FS, CR> {
 mod tests {
     use super::*;
 
+    #[derive(Debug, Clone, Copy)]
     struct MockAuditFs;
     impl FileSystem for MockAuditFs {
         fn read_to_string(&self, path: &str) -> Result<String, EngineError> {
@@ -227,6 +308,7 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone, Copy)]
     struct MockAuditRunner;
     impl CommandRunner for MockAuditRunner {
         fn run(&self, _program: &str, _args: &[&str]) -> Result<String, EngineError> {
@@ -274,5 +356,86 @@ mod tests {
             report1.asset.id, report2.asset.id,
             "AssetId must be deterministic across runs against the same host"
         );
+    }
+
+    #[test]
+    fn test_audit_engine_records_check_statuses() {
+        let org_id = OrganizationId::new();
+        let engine = AuditEngine::new(MockAuditFs, MockAuditRunner, default_linux_rules());
+        let report = engine
+            .run_local_audit(org_id)
+            .expect("audit execution should succeed");
+
+        assert_ne!(report.check_statuses.len(), 0);
+        let has_executed = report
+            .check_statuses
+            .iter()
+            .any(|r| matches!(r.status, CheckExecutionStatus::Executed { .. }));
+        assert!(
+            has_executed,
+            "at least one rule should be recorded as executed"
+        );
+    }
+
+    struct MockWindowsBackend;
+    impl PlatformBackend for MockWindowsBackend {
+        fn info(&self) -> &PlatformInfo {
+            static WIN_INFO: std::sync::OnceLock<PlatformInfo> = std::sync::OnceLock::new();
+            WIN_INFO.get_or_init(|| PlatformInfo {
+                family: PlatformFamily::Windows,
+                distribution: crate::platform::PlatformDistribution::Windows11,
+                version: crate::platform::PlatformVersion::parse("10.0.22631"),
+                architecture: "x86_64".into(),
+                kernel_release: "10.0.22631".into(),
+                hostname: "WIN-PC".into(),
+                pretty_name: "Windows 11".into(),
+                machine_id: None,
+                capabilities: vec![crate::platform::PlatformCapability::WindowsRegistry],
+            })
+        }
+
+        fn is_supported(&self) -> bool {
+            true
+        }
+
+        fn collect_context(&self) -> Result<crate::collector::HostInspectionContext, EngineError> {
+            Ok(crate::collector::HostInspectionContext {
+                os: None,
+                ssh: None,
+                users: None,
+                listening_ports: Vec::new(),
+                firewall: None,
+                file_permissions: Vec::new(),
+                udp_ports: Vec::new(),
+                suid_binaries: Vec::new(),
+                sysctl: None,
+                path_entries: Vec::new(),
+                current_privilege: PrivilegeLevel::Unprivileged,
+            })
+        }
+    }
+
+    #[test]
+    fn test_audit_engine_unsupported_platform_recorded_not_silently_passed() {
+        let org_id = OrganizationId::new();
+        let engine = AuditEngine::new(MockAuditFs, MockAuditRunner, default_linux_rules());
+        let backend = MockWindowsBackend;
+
+        let report = engine
+            .run_audit_with_backend(org_id, &backend, AuditProfile::Baseline)
+            .expect("audit execution should complete");
+
+        assert_eq!(report.asset.asset_type, AssetType::WindowsHost);
+        // All default linux rules must be marked as UnsupportedPlatform, never passing silently!
+        for record in &report.check_statuses {
+            assert!(
+                matches!(
+                    record.status,
+                    CheckExecutionStatus::UnsupportedPlatform { .. }
+                ),
+                "Rule {} must be recorded as UnsupportedPlatform on Windows",
+                record.rule_id
+            );
+        }
     }
 }

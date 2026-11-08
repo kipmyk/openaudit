@@ -524,6 +524,21 @@ fn test_frame_encoding_and_error_handling() {
     assert!(err4.contains("failed to read message body"));
 }
 
+fn resolve_target_debug_dir() -> PathBuf {
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+        let path = PathBuf::from(target_dir).join("debug");
+        if path.exists() {
+            return path;
+        }
+    }
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(|p| p.join("target/debug"))
+        .expect("must resolve target/debug")
+}
+
 // -----------------------------------------------------------------------------
 // Test 7: Cross-Binary Encrypted Enrollment & Retrieval over Live TLS 1.3
 // -----------------------------------------------------------------------------
@@ -537,12 +552,7 @@ fn test_cross_binary_tls13_enrollment_and_retrieval() {
     let swtpm = LiveSwtpm::new();
     let pki = TestPki::generate("localhost");
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .map(|p| p.join("target/debug"))
-        .expect("must resolve target/debug");
+    let target_dir = resolve_target_debug_dir();
 
     let server_bin = target_dir.join("openaudit-server");
     let agent_bin = target_dir.join("openaudit-agent");
@@ -736,12 +746,7 @@ fn test_replay_protection_over_tls_transport() {
     let swtpm = LiveSwtpm::new();
     let pki = TestPki::generate("localhost");
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .map(|p| p.join("target/debug"))
-        .expect("must resolve target/debug");
+    let target_dir = resolve_target_debug_dir();
 
     let server_bin = target_dir.join("openaudit-server");
     let agent_bin = target_dir.join("openaudit-agent");
@@ -948,12 +953,7 @@ fn test_cross_binary_complete_tls13_lifecycle_with_restart() {
     let pki = TestPki::generate("localhost");
     let unrelated_pki = TestPki::generate("unrelated.authority");
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let target_dir = manifest_dir
-        .parent()
-        .and_then(Path::parent)
-        .map(|p| p.join("target/debug"))
-        .expect("must resolve target/debug");
+    let target_dir = resolve_target_debug_dir();
 
     let server_bin = target_dir.join("openaudit-server");
     let agent_bin = target_dir.join("openaudit-agent");

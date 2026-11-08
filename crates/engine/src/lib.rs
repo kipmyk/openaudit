@@ -10,11 +10,19 @@
 
 pub mod collector;
 pub mod error;
+pub mod platform;
+pub mod profile;
 pub mod rule;
 pub mod runner;
 
 pub use collector::{HostInspectionContext, PrivilegeLevel};
 pub use error::EngineError;
+pub use platform::{
+    default_platform_backend, detect_current_platform, CheckExecutionStatus, CheckStatusRecord,
+    LinuxPlatformBackend, MacosPlatformBackend, PlatformBackend, PlatformCapability,
+    PlatformDistribution, PlatformFamily, PlatformInfo, PlatformVersion, WindowsPlatformBackend,
+};
+pub use profile::AuditProfile;
 pub use rule::{builtin::default_linux_rules, Rule, RuleFinding};
 pub use runner::{AuditEngine, AuditFindingItem, AuditReport};
 

@@ -12,6 +12,10 @@ use crate::id::{AssetId, OrganizationId};
 pub enum AssetType {
     /// A Linux operating system host (monitored via agent or local audit).
     LinuxHost,
+    /// A Windows operating system host (monitored via agent or local audit).
+    WindowsHost,
+    /// A macOS operating system host (monitored via agent or local audit).
+    MacosHost,
     /// An internet-facing web domain or FQDN (monitored via agentless perimeter checks).
     WebDomain,
     /// An explicit IP address or network endpoint.
@@ -233,5 +237,33 @@ mod tests {
         let json = serde_json::to_string(&asset).expect("serialize");
         let deserialized: Asset = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(asset, deserialized);
+
+        let win_asset =
+            Asset::new(org_id, "WinHost", AssetType::WindowsHost, "192.168.1.50").unwrap();
+        let win_json = serde_json::to_string(&win_asset).expect("serialize");
+        assert!(win_json.contains("\"asset_type\":\"windows_host\""));
+        let win_deser: Asset = serde_json::from_str(&win_json).expect("deserialize");
+        assert_eq!(win_asset, win_deser);
+
+        let mac_asset =
+            Asset::new(org_id, "MacHost", AssetType::MacosHost, "192.168.1.51").unwrap();
+        let mac_json = serde_json::to_string(&mac_asset).expect("serialize");
+        assert!(mac_json.contains("\"asset_type\":\"macos_host\""));
+        let mac_deser: Asset = serde_json::from_str(&mac_json).expect("deserialize");
+        assert_eq!(mac_asset, mac_deser);
+
+        let win_asset =
+            Asset::new(org_id, "WinHost", AssetType::WindowsHost, "192.168.1.50").unwrap();
+        let win_json = serde_json::to_string(&win_asset).expect("serialize");
+        assert!(win_json.contains("\"asset_type\":\"windows_host\""));
+        let win_deser: Asset = serde_json::from_str(&win_json).expect("deserialize");
+        assert_eq!(win_asset, win_deser);
+
+        let mac_asset =
+            Asset::new(org_id, "MacHost", AssetType::MacosHost, "192.168.1.51").unwrap();
+        let mac_json = serde_json::to_string(&mac_asset).expect("serialize");
+        assert!(mac_json.contains("\"asset_type\":\"macos_host\""));
+        let mac_deser: Asset = serde_json::from_str(&mac_json).expect("deserialize");
+        assert_eq!(mac_asset, mac_deser);
     }
 }

@@ -147,7 +147,15 @@ impl Drop for LiveSwtpm {
 
 /// Resolves the absolute path to a compiled cargo binary in `target/debug`.
 fn get_binary_path(bin_name: &str) -> PathBuf {
-    // Navigate from CARGO_MANIFEST_DIR (crates/core) up to workspace root
+    // 1. If CARGO_TARGET_DIR is set (e.g. in containerized CI environments), prioritize it.
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+        let path = PathBuf::from(target_dir).join("debug").join(bin_name);
+        if path.is_file() {
+            return path;
+        }
+    }
+
+    // 2. Navigate from CARGO_MANIFEST_DIR (crates/core) up to workspace root
     let target_debug = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("crates")
@@ -166,15 +174,18 @@ fn get_binary_path(bin_name: &str) -> PathBuf {
         .args(["build", "--bin", bin_name])
         .output();
 
+    if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
+        let path = PathBuf::from(target_dir).join("debug").join(bin_name);
+        if path.is_file() {
+            return path;
+        }
+    }
+
     if target_debug.is_file() {
         return target_debug;
     }
 
-    panic!(
-        "compiled binary '{}' not found at '{}'; ensure cargo build --bins was executed",
-        bin_name,
-        target_debug.display()
-    );
+    panic!("compiled binary '{bin_name}' not found; ensure cargo build --bins was executed");
 }
 
 /// Extracts a key-value token from binary stdout stream: `KEY: VALUE`.

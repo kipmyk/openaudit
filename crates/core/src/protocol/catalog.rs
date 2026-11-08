@@ -1942,6 +1942,15 @@ mod tests {
         // Make directory read-only (0400)
         let _ = fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o400));
 
+        // When running as root (e.g. in container environments), root bypasses DAC
+        // permissions (CAP_DAC_OVERRIDE). Verify if permission enforcement actually blocked writes.
+        let probe = dir.path().join(".probe_write");
+        if fs::write(&probe, b"test").is_ok() {
+            let _ = fs::remove_file(probe);
+            let _ = fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700));
+            return;
+        }
+
         let v2 = make_test_catalog(2, 11, "v2");
         let res = mgr.execute_transaction(&v2, &mut counter);
         assert!(res.is_err());

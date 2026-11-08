@@ -3,7 +3,12 @@
 pub mod builtin;
 
 use crate::collector::{HostInspectionContext, PrivilegeLevel};
+use crate::platform::{PlatformCapability, PlatformFamily};
+use crate::profile::AuditProfile;
 use openaudit_core::{EvidenceType, Severity};
+
+const DEFAULT_LINUX_PLATFORMS: &[PlatformFamily] = &[PlatformFamily::Linux];
+const EMPTY_CAPABILITIES: &[PlatformCapability] = &[];
 
 /// Structured finding produced by a security rule evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,4 +53,19 @@ pub trait Rule: Send + Sync {
 
     /// Evaluates host inspection telemetry, returning all findings where violations are detected.
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding>;
+
+    /// Target operating system platforms for which this rule is applicable.
+    fn target_platforms(&self) -> &[PlatformFamily] {
+        DEFAULT_LINUX_PLATFORMS
+    }
+
+    /// Platform capabilities required to evaluate this rule.
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        EMPTY_CAPABILITIES
+    }
+
+    /// Audit profile tier for this rule.
+    fn profile(&self) -> AuditProfile {
+        AuditProfile::Baseline
+    }
 }
