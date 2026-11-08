@@ -1,0 +1,6 @@
+target/
+.git/
+.colima/
+.gemini/
+*.sock
+
