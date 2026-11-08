@@ -735,6 +735,7 @@ fn run_enroll_tls(args: &[String]) -> Result<(), String> {
     let resp = transport
         .exchange(&req)
         .map_err(|err| format!("TLS exchange failed: {err}"))?;
+    let _ = transport.shutdown();
 
     match resp {
         openaudit_core::protocol::TlsProtocolResponse::Success { payload } => {
@@ -860,6 +861,7 @@ fn run_retrieve_tls(args: &[String]) -> Result<(), String> {
     let resp = transport
         .exchange(&req)
         .map_err(|err| format!("TLS exchange failed: {err}"))?;
+    let _ = transport.shutdown();
 
     match resp {
         openaudit_core::protocol::TlsProtocolResponse::Success { payload } => {

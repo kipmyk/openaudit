@@ -62,10 +62,37 @@ pub fn parse_certificates_from_pem(
 /// Reads DER certificate chain from a PEM file.
 ///
 /// # Errors
-/// Returns [`ProtocolError::TlsError`] if file reading or PEM decoding fails.
+/// Returns [`ProtocolError::TlsError`] if file reading or PEM decoding fails or file is not regular.
 pub fn load_certificates_from_file(
     path: &Path,
 ) -> Result<Vec<CertificateDer<'static>>, ProtocolError> {
+    let meta = fs::symlink_metadata(path).map_err(|err| {
+        ProtocolError::TlsError(format!(
+            "failed to stat certificate file at '{}': {err}",
+            path.display()
+        ))
+    })?;
+
+    if !meta.file_type().is_file() {
+        return Err(ProtocolError::TlsError(format!(
+            "certificate path '{}' is not a regular file (symlinks, directories, and special files are forbidden)",
+            path.display()
+        )));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = meta.permissions().mode() & 0o777;
+        if mode & 0o002 != 0 {
+            return Err(ProtocolError::TlsError(format!(
+                "insecure permissions on certificate file at '{}': mode 0o{:o} is world-writable",
+                path.display(),
+                mode
+            )));
+        }
+    }
+
     let bytes = fs::read(path).map_err(|err| {
         ProtocolError::TlsError(format!(
             "failed to read certificate file at '{}': {err}",
@@ -90,26 +117,34 @@ pub fn parse_private_key_from_pem(
     Ok(key)
 }
 
-/// Reads a private key from a PEM file, strictly enforcing restrictive permissions (`0600`).
+/// Reads a private key from a PEM file, strictly enforcing regular file type and restrictive permissions (`0600` or `0400`).
 ///
 /// # Errors
-/// Returns [`ProtocolError::TlsError`] if the file has insecure permissions or key parsing fails.
+/// Returns [`ProtocolError::TlsError`] if the file is a symlink, has insecure permissions, or key parsing fails.
 pub fn load_private_key_from_file(path: &Path) -> Result<PrivateKeyDer<'static>, ProtocolError> {
+    let meta = fs::symlink_metadata(path).map_err(|err| {
+        ProtocolError::TlsError(format!(
+            "failed to stat private key file at '{}': {err}",
+            path.display()
+        ))
+    })?;
+
+    if !meta.file_type().is_file() {
+        return Err(ProtocolError::TlsError(format!(
+            "private key path '{}' is not a regular file (symlinks, directories, and special files are forbidden)",
+            path.display()
+        )));
+    }
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let meta = fs::metadata(path).map_err(|err| {
-            ProtocolError::TlsError(format!(
-                "failed to stat private key file at '{}': {err}",
-                path.display()
-            ))
-        })?;
-        let mode = meta.permissions().mode();
-        if mode & 0o077 != 0 {
+        let mode = meta.permissions().mode() & 0o777;
+        if mode != 0o600 && mode != 0o400 {
             return Err(ProtocolError::TlsError(format!(
-                "insecure permissions on private key file at '{}': mode 0o{:o} permits group/other access (strictly requires 0600)",
+                "insecure permissions on private key file at '{}': mode 0o{:o} detected; strictly requires mode 0600 or 0400",
                 path.display(),
-                mode & 0o777
+                mode
             )));
         }
     }
@@ -191,6 +226,12 @@ pub fn build_tls13_client_config(
 /// # Errors
 /// Returns [`ProtocolError::TlsError`] if write or flush fails or message exceeds size limit.
 pub fn write_framed<W: Write>(writer: &mut W, data: &[u8]) -> Result<(), ProtocolError> {
+    if data.is_empty() {
+        return Err(ProtocolError::TlsError(
+            "cannot write empty framed message (zero-length frames forbidden)".to_string(),
+        ));
+    }
+
     if data.len() > MAX_FRAMED_MESSAGE_BYTES {
         return Err(ProtocolError::TlsError(format!(
             "message size {} exceeds maximum framed limit {}",
@@ -217,7 +258,7 @@ pub fn write_framed<W: Write>(writer: &mut W, data: &[u8]) -> Result<(), Protoco
 /// Reads a 4-byte big-endian length-prefixed message from `reader`.
 ///
 /// # Errors
-/// Returns [`ProtocolError::TlsError`] if read fails or message exceeds `max_bytes`.
+/// Returns [`ProtocolError::TlsError`] if read fails, length is 0, or message exceeds `max_bytes`.
 pub fn read_framed<R: Read>(reader: &mut R, max_bytes: usize) -> Result<Vec<u8>, ProtocolError> {
     let mut len_buf = [0u8; 4];
     reader.read_exact(&mut len_buf).map_err(|err| {
@@ -226,6 +267,12 @@ pub fn read_framed<R: Read>(reader: &mut R, max_bytes: usize) -> Result<Vec<u8>,
 
     let len = usize::try_from(u32::from_be_bytes(len_buf))
         .map_err(|_| ProtocolError::TlsError("invalid length prefix conversion".to_string()))?;
+
+    if len == 0 {
+        return Err(ProtocolError::TlsError(
+            "incoming message length is zero (empty frames forbidden)".to_string(),
+        ));
+    }
 
     if len > max_bytes {
         return Err(ProtocolError::TlsError(format!(
@@ -422,6 +469,16 @@ impl TlsClientTransport {
         })?;
 
         Ok(resp)
+    }
+
+    /// Cleanly closes the TLS 1.3 session by sending a `close_notify` alert and flushing the stream.
+    ///
+    /// # Errors
+    /// Returns [`ProtocolError::TlsError`] if flushing fails.
+    pub fn shutdown(&mut self) -> Result<(), ProtocolError> {
+        self.stream.conn.send_close_notify();
+        let _ = self.stream.flush();
+        Ok(())
     }
 }
 

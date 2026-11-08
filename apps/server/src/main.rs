@@ -789,7 +789,7 @@ fn run_authority_serve_tls(args: &[String]) -> Result<(), String> {
                 )
                 .unwrap_or_else(|err| {
                     openaudit_core::protocol::TlsProtocolResponse::Error {
-                        code: "INTERNAL_ERROR".to_string(),
+                        code: "MALFORMED_REQUEST".to_string(),
                         message: err.to_string(),
                     }
                 });

@@ -458,6 +458,73 @@ fn test_rejection_of_insecure_private_key_permissions() {
 }
 
 // -----------------------------------------------------------------------------
+// Test 6b: Symlink Rejection for Private Keys and Certificates
+// -----------------------------------------------------------------------------
+#[test]
+fn test_rejection_of_symlink_private_key_and_cert() {
+    let pki = TestPki::generate("localhost");
+    let temp_dir = std::env::temp_dir().join(format!("oa_tls_sym_{}", std::process::id()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let symlink_key = temp_dir.join("sym_key.pem");
+    let symlink_cert = temp_dir.join("sym_cert.pem");
+
+    std::os::unix::fs::symlink(&pki.server_key_path, &symlink_key).unwrap();
+    std::os::unix::fs::symlink(&pki.server_cert_path, &symlink_cert).unwrap();
+
+    let key_err = load_private_key_from_file(&symlink_key)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        key_err.contains("is not a regular file"),
+        "symlink key must be rejected: {key_err}"
+    );
+
+    let cert_err = load_certificates_from_file(&symlink_cert)
+        .err()
+        .unwrap()
+        .to_string();
+    assert!(
+        cert_err.contains("is not a regular file"),
+        "symlink cert must be rejected: {cert_err}"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+// -----------------------------------------------------------------------------
+// Test 6c: Frame Encoding, Decoding, and Error Handling (Empty, Oversized, Truncated)
+// -----------------------------------------------------------------------------
+#[test]
+fn test_frame_encoding_and_error_handling() {
+    use std::io::Cursor;
+
+    // 1. Empty write is rejected
+    let mut out = Vec::new();
+    let err1 = write_framed(&mut out, b"").err().unwrap().to_string();
+    assert!(err1.contains("cannot write empty framed message"));
+
+    // 2. Empty read (len == 0) is rejected
+    let mut zero_len = Cursor::new(0u32.to_be_bytes());
+    let err2 = read_framed(&mut zero_len, 1024).err().unwrap().to_string();
+    assert!(err2.contains("incoming message length is zero"));
+
+    // 3. Oversized read is rejected
+    let mut oversized = Cursor::new(100u32.to_be_bytes());
+    let err3 = read_framed(&mut oversized, 50).err().unwrap().to_string();
+    assert!(err3.contains("exceeds permitted limit"));
+
+    // 4. Truncated read is rejected
+    let mut truncated_data = Vec::new();
+    truncated_data.extend_from_slice(&10u32.to_be_bytes());
+    truncated_data.extend_from_slice(&[1, 2, 3]); // only 3 bytes instead of 10
+    let mut truncated = Cursor::new(truncated_data);
+    let err4 = read_framed(&mut truncated, 1024).err().unwrap().to_string();
+    assert!(err4.contains("failed to read message body"));
+}
+
+// -----------------------------------------------------------------------------
 // Test 7: Cross-Binary Encrypted Enrollment & Retrieval over Live TLS 1.3
 // -----------------------------------------------------------------------------
 #[test]
@@ -829,6 +896,8 @@ fn test_replay_protection_over_tls_transport() {
         matches!(resp1, TlsProtocolResponse::Success { .. }),
         "first retrieval over TLS must succeed"
     );
+    let _ = transport1.shutdown();
+    drop(transport1);
 
     // Replay attack: send identical request over a second TLS connection
     let mut transport2 =
@@ -850,6 +919,329 @@ fn test_replay_protection_over_tls_transport() {
 
     let _ = server_child.kill();
     let _ = server_child.wait();
+    let _ = fs::remove_dir_all(&temp_root);
+}
+
+// -----------------------------------------------------------------------------
+// Test 9: Complete 10-Step Cross-Binary TLS 1.3 Lifecycle with Process Restarts
+// -----------------------------------------------------------------------------
+#[test]
+#[allow(clippy::too_many_lines)]
+fn test_cross_binary_complete_tls13_lifecycle_with_restart() {
+    let _lock = TLS_XB_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let swtpm = LiveSwtpm::new();
+    let pki = TestPki::generate("localhost");
+    let unrelated_pki = TestPki::generate("unrelated.authority");
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let target_dir = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(|p| p.join("target/debug"))
+        .expect("must resolve target/debug");
+
+    let server_bin = target_dir.join("openaudit-server");
+    let agent_bin = target_dir.join("openaudit-agent");
+
+    let temp_root = std::env::temp_dir().join(format!("oa_tls_lifecycle_{}", std::process::id()));
+    fs::create_dir_all(&temp_root).unwrap();
+
+    let server_data = temp_root.join("server_data");
+    let agent_state = temp_root.join("agent_state");
+    fs::create_dir_all(&server_data).unwrap();
+    fs::create_dir_all(&agent_state).unwrap();
+
+    // STEP 0: Initialize authority catalog (version 1)
+    let init_res = Command::new(&server_bin)
+        .args([
+            "authority",
+            "catalog-init",
+            "--data-dir",
+            server_data.to_str().unwrap(),
+        ])
+        .output()
+        .expect("catalog init");
+    assert!(init_res.status.success());
+
+    // STEP 1: Start TLS Server daemon on an ephemeral port
+    let probe_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = probe_listener.local_addr().unwrap().port();
+    drop(probe_listener);
+
+    let bind_addr = format!("127.0.0.1:{port}");
+
+    // Agent provisions first to establish shared secret
+    // STEP 3: Provision agent against TPM emulator
+    let prov_res = Command::new(&agent_bin)
+        .args([
+            "provision",
+            "--tpm",
+            swtpm.sock_path.to_str().unwrap(),
+            "--state-dir",
+            agent_state.to_str().unwrap(),
+        ])
+        .output()
+        .expect("agent provision");
+    assert!(prov_res.status.success());
+    let prov_stdout = String::from_utf8_lossy(&prov_res.stdout);
+    let machine_id = extract_field(&prov_stdout, "MACHINE_ID:").expect("machine id");
+
+    // Copy agent-generated secret to server data directory (mode 0600)
+    let agent_secret = agent_state.join("tpm-auth.secret");
+    let server_secret = server_data.join("tpm-auth.secret");
+    fs::copy(&agent_secret, &server_secret).unwrap();
+    fs::set_permissions(&server_secret, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let mut server_child = Command::new(&server_bin)
+        .args([
+            "authority",
+            "serve-tls",
+            "--bind",
+            &bind_addr,
+            "--cert",
+            pki.server_cert_path.to_str().unwrap(),
+            "--key",
+            pki.server_key_path.to_str().unwrap(),
+            "--secret-file",
+            server_secret.to_str().unwrap(),
+            "--data-dir",
+            server_data.to_str().unwrap(),
+            "--max-requests",
+            "10",
+        ])
+        .spawn()
+        .expect("spawn server daemon");
+
+    thread::sleep(Duration::from_millis(300));
+
+    // STEP 2: Validate server certificate over TLS
+    let root_certs = load_certificates_from_file(&pki.ca_cert_path).unwrap();
+    let client_config = Arc::new(build_tls13_client_config(root_certs).unwrap());
+    {
+        let mut transport_check =
+            TlsClientTransport::connect(&bind_addr, "localhost", client_config.clone())
+                .expect("certificate validation must succeed");
+        let _ = transport_check.shutdown();
+    }
+
+    // STEP 4: Server issues single-use enrollment token
+    let token_res = Command::new(&server_bin)
+        .args([
+            "authority",
+            "token-issue",
+            "--data-dir",
+            server_data.to_str().unwrap(),
+            "--machine-id",
+            &machine_id,
+            "--generate-nonce",
+            "--generation",
+            "1",
+            "--ttl-secs",
+            "300",
+        ])
+        .output()
+        .expect("token issue");
+    assert!(token_res.status.success());
+    let token_stdout = String::from_utf8_lossy(&token_res.stdout);
+    let token_id = extract_field(&token_stdout, "TOKEN_ID:").unwrap();
+    let nonce = extract_field(&token_stdout, "NONCE:").unwrap();
+    let expires_at_ns = extract_field(&token_stdout, "EXPIRES_AT_NS:").unwrap();
+
+    // STEP 5: Enroll agent over live TLS
+    let enroll_res = Command::new(&agent_bin)
+        .args([
+            "enroll-tls",
+            "--server",
+            &bind_addr,
+            "--server-name",
+            "localhost",
+            "--ca-cert",
+            pki.ca_cert_path.to_str().unwrap(),
+            "--tpm",
+            swtpm.sock_path.to_str().unwrap(),
+            "--state-dir",
+            agent_state.to_str().unwrap(),
+            "--token-id",
+            &token_id,
+            "--nonce",
+            &nonce,
+            "--expires-at-ns",
+            &expires_at_ns,
+        ])
+        .output()
+        .expect("enroll-tls");
+    assert!(
+        enroll_res.status.success(),
+        "enroll-tls stderr: {}",
+        String::from_utf8_lossy(&enroll_res.stderr)
+    );
+    let enroll_out = String::from_utf8_lossy(&enroll_res.stdout);
+    assert!(enroll_out.contains("TLS_ENROLL: SUCCESS"));
+    let tx_id = extract_field(&enroll_out, "TRANSACTION_ID:").expect("transaction id");
+
+    // STEP 6: Verify machine registration persisted in authority.db
+    let authority_db = server_data.join("authority.db");
+    assert!(authority_db.is_file(), "authority.db must exist");
+    let auth_conn = rusqlite::Connection::open(&authority_db).unwrap();
+    let registered_count: i64 = auth_conn
+        .query_row("SELECT COUNT(*) FROM registered_machines", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        registered_count, 1,
+        "machine must be registered in authority.db"
+    );
+
+    let token_consumed: i64 = auth_conn
+        .query_row(
+            "SELECT COUNT(*) FROM enrollment_tokens WHERE consumed = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(token_consumed, 1, "token must be marked consumed");
+    drop(auth_conn);
+
+    // STEP 7: Restart server and agent processes
+    // Kill existing server child and spawn fresh instance
+    let _ = server_child.kill();
+    let _ = server_child.wait();
+
+    let mut restarted_server = Command::new(&server_bin)
+        .args([
+            "authority",
+            "serve-tls",
+            "--bind",
+            &bind_addr,
+            "--cert",
+            pki.server_cert_path.to_str().unwrap(),
+            "--key",
+            pki.server_key_path.to_str().unwrap(),
+            "--secret-file",
+            server_secret.to_str().unwrap(),
+            "--data-dir",
+            server_data.to_str().unwrap(),
+            "--max-requests",
+            "10",
+        ])
+        .spawn()
+        .expect("restart server daemon");
+
+    thread::sleep(Duration::from_millis(300));
+
+    // STEP 8: Retrieve authorized catalog data over TLS using restarted agent & server
+    let retrieve_res = Command::new(&agent_bin)
+        .args([
+            "retrieve-tls",
+            "--server",
+            &bind_addr,
+            "--server-name",
+            "localhost",
+            "--ca-cert",
+            pki.ca_cert_path.to_str().unwrap(),
+            "--state-dir",
+            agent_state.to_str().unwrap(),
+            "--tx-id",
+            &tx_id,
+        ])
+        .output()
+        .expect("retrieve-tls");
+    assert!(
+        retrieve_res.status.success(),
+        "retrieve-tls stderr: {}",
+        String::from_utf8_lossy(&retrieve_res.stderr)
+    );
+    let retrieve_out = String::from_utf8_lossy(&retrieve_res.stdout);
+    assert!(retrieve_out.contains("TLS_RETRIEVE: SUCCESS"));
+    assert!(retrieve_out.contains("CATALOG_VERSION: 1"));
+
+    // STEP 9: Replay rejection over TLS
+    // Generate offline raw retrieval message
+    let offline_retrieve = Command::new(&agent_bin)
+        .args([
+            "retrieve",
+            "--state-dir",
+            agent_state.to_str().unwrap(),
+            "--tx-id",
+            &tx_id,
+        ])
+        .output()
+        .unwrap();
+    let off_out = String::from_utf8_lossy(&offline_retrieve.stdout);
+    let req_hex = extract_field(&off_out, "RETRIEVAL_REQUEST:").unwrap();
+    let proof_hex = extract_field(&off_out, "HMAC_PROOF:").unwrap();
+
+    let req_envelope = TlsProtocolRequest::Retrieval {
+        retrieval_message_hex: req_hex,
+        hmac_proof_hex: proof_hex,
+    };
+
+    let mut live_client =
+        TlsClientTransport::connect(&bind_addr, "localhost", client_config.clone()).unwrap();
+    let first_resp = live_client.exchange(&req_envelope).unwrap();
+    assert!(matches!(first_resp, TlsProtocolResponse::Success { .. }));
+    let _ = live_client.shutdown();
+    drop(live_client);
+
+    // Replay attack over a second TLS connection
+    let mut replay_client =
+        TlsClientTransport::connect(&bind_addr, "localhost", client_config).unwrap();
+    let replay_resp = replay_client.exchange(&req_envelope).unwrap();
+    match replay_resp {
+        TlsProtocolResponse::Error { code, message } => {
+            assert_eq!(code, "REPLAY_DETECTED");
+            assert!(message.contains("replay detected"));
+        }
+        other @ TlsProtocolResponse::Success { .. } => {
+            panic!("expected REPLAY_DETECTED error, got {other:?}")
+        }
+    }
+    let _ = replay_client.shutdown();
+    drop(replay_client);
+
+    // STEP 10: Reject invalid certificates and malformed requests
+    // 10a. Connection with untrusted CA certificate
+    let untrusted_roots = load_certificates_from_file(&unrelated_pki.ca_cert_path).unwrap();
+    let untrusted_config = Arc::new(build_tls13_client_config(untrusted_roots).unwrap());
+    let untrusted_conn = TlsClientTransport::connect(&bind_addr, "localhost", untrusted_config);
+    if let Ok(mut c) = untrusted_conn {
+        let exchange_res = c.exchange(&req_envelope);
+        assert!(
+            exchange_res.is_err(),
+            "untrusted certificate exchange must fail"
+        );
+    }
+
+    // 10b. Malformed frame sent over valid TLS connection
+    let raw_stream = TcpStream::connect(&bind_addr).unwrap();
+    let valid_roots = load_certificates_from_file(&pki.ca_cert_path).unwrap();
+    let valid_config = Arc::new(build_tls13_client_config(valid_roots).unwrap());
+    let server_name = ServerName::try_from("localhost".to_string()).unwrap();
+    let conn = ClientConnection::new(valid_config, server_name).unwrap();
+    let mut tls_stream = StreamOwned::new(conn, raw_stream);
+
+    // Send malformed JSON payload
+    let bad_json = b"{ NOT_VALID_JSON }";
+    write_framed(&mut tls_stream, bad_json).unwrap();
+    let malformed_resp_bytes = read_framed(&mut tls_stream, 1024).unwrap();
+    let malformed_resp: TlsProtocolResponse =
+        serde_json::from_slice(&malformed_resp_bytes).unwrap();
+    match malformed_resp {
+        TlsProtocolResponse::Error { code, message } => {
+            assert_eq!(code, "MALFORMED_REQUEST");
+            assert!(message.contains("invalid request JSON"));
+        }
+        other @ TlsProtocolResponse::Success { .. } => {
+            panic!("expected MALFORMED_REQUEST, got {other:?}")
+        }
+    }
+
+    let _ = restarted_server.kill();
+    let _ = restarted_server.wait();
     let _ = fs::remove_dir_all(&temp_root);
 }
 
