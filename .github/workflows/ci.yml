@@ -72,3 +72,19 @@ jobs:
 
       - name: Run cargo-audit in Ubuntu 24.04 container
         run: ./scripts/ci-local.sh audit
+
+  multi-distro:
+    name: Multi-Distribution Verification (Debian 12 & 13)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build Debian 12 and 13 verification containers
+        run: |
+          docker build -f docker/debian-12.Dockerfile -t openaudit-ci:debian-12 .
+          docker build -f docker/debian-13.Dockerfile -t openaudit-ci:debian-13 .
+
+      - name: Run multi-distribution test runner
+        run: ./scripts/test-distros.sh
