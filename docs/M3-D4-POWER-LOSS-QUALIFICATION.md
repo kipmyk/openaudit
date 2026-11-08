@@ -40,3 +40,4 @@ While physical power cut qualification is gated on testbench hardware, the under
 
 - **Disposition:** Designated as **`BLOCKED`** pending availability of laboratory power-switch testbench instrumentation.
 - **Safety Standard:** No unverified claims of physical power cut qualification are asserted.
+
