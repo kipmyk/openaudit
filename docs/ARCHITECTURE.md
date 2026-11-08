@@ -305,7 +305,57 @@ OpenAudit strictly distinguishes between verification environments and never con
 - Debian 13 ships with glibc 2.41+, providing forward dynamic compatibility for Ubuntu 24.04 ELF binaries.
 - Each distribution's verification container compiles and verifies OpenAudit against its native glibc and userland tooling.
 
-### D. Fail-Closed Guarantees & Linux Engine Preservation
+### D. Windows Native Audit Architecture (Milestone M3.3)
 
-- **Strict Fail-Closed Semantics:** On unsupported platforms (Windows M3.3, macOS M3.4, or unvalidated Linux distributions), OpenAudit rejects execution with typed `EngineError::UnsupportedPlatform` and records `CheckExecutionStatus::UnsupportedPlatform`. No synthetic or simulated audit data is ever returned.
+Milestone M3.3 establishes a native Windows audit backend (`WindowsPlatformBackend`) integrated into the shared Rust engine. The backend directly gathers host telemetry through native Windows administration tools and registry interfaces, bypassing Unix-centric abstractions.
+
+#### Validated Windows Platform Targets
+
+| Platform / Edition | Build Requirement | Status | Validation Tiers |
+|---|---|---|---|
+| **Windows 11** | Build >= 22000 | Supported | Native Windows Runner (`windows-latest`), Mock-tested (`windows_compatibility_regression.rs`) |
+| **Windows Server 2022** | Build == 20348 | Supported | Native Windows Runner, Mock-tested |
+| **Windows Server 2025** | Build >= 26100 | Supported | Native Windows Runner, Mock-tested |
+| **Windows 10** | Build 10240..21999 | Unsupported | Fails closed with typed `EngineError::UnsupportedPlatform` |
+| **Windows 7 / 8 / 8.1** | Legacy | Unsupported | Fails closed with typed `EngineError::UnsupportedPlatform` |
+| **Windows Server 2012 / 2016** | Legacy | Unsupported | Fails closed with typed `EngineError::UnsupportedPlatform` |
+
+#### Windows Telemetry Collection Architecture
+
+1. **Elevation & Privilege Detection:**
+   Privilege level is detected by inspecting process tokens via `whoami /groups` looking for the built-in Administrator group SID (`S-1-5-32-544`) and `High Mandatory Level`. Non-elevated execution gracefully flags checks requiring elevation with `CheckExecutionStatus::InsufficientPrivilege`.
+
+2. **Subprocess & Registry Queries:**
+   - **Defender State:** `Get-MpComputerStatus` via PowerShell without profile loading (`-NoProfile -NonInteractive`).
+   - **Firewall Profiles:** `netsh.exe advfirewall show allprofiles` parsing Domain, Private, and Public profiles.
+   - **Security Registry:** `reg.exe query` checking UAC (`EnableLUA`), legacy SMBv1 (`SMB1`), LSA protection (`RunAsPPL`), and WDigest plaintext credential caching.
+   - **Services:** `Get-CimInstance Win32_Service` scanning for unquoted binary paths with embedded spaces.
+   - **Local Accounts:** `Get-LocalUser` and `Get-LocalGroupMember` detecting active Guest accounts and empty password requirements.
+   - **Network Exposure:** `netstat.exe -ano -p tcp` resolving wildcard listening sockets on SMB (445) and RDP (3389).
+
+#### 12 Native Windows Security Rules
+
+| Rule ID | Title | Severity | Security Domain |
+|---|---|---|---|
+| `windows.defender.realtime-disabled` | Defender Real-Time Protection Disabled | Critical | Endpoint Antivirus |
+| `windows.defender.antivirus-disabled` | Defender Antivirus Engine Inactive | High | Endpoint Antivirus |
+| `windows.firewall.profile-disabled` | Firewall Profile Disabled | High | Network Perimeter |
+| `windows.registry.uac-disabled` | User Account Control (UAC) Disabled | Critical | System Integrity |
+| `windows.registry.smbv1-enabled` | Legacy SMBv1 Protocol Enabled | High | Protocol Security |
+| `windows.registry.lsa-protection-disabled` | LSA Credential Guard (RunAsPPL) Disabled | High | Memory & LSASS |
+| `windows.services.unquoted-path` | Unquoted Windows Service Path | Medium | Privilege Escalation |
+| `windows.accounts.guest-enabled` | Built-in Guest Account Active | High | Account Posture |
+| `windows.accounts.empty-password` | Account Without Password Required | Critical | Account Posture |
+| `windows.ports.exposed-smb` | Exposed Windows SMB Port 445 | High | Network Exposure |
+| `windows.ports.exposed-rdp` | Exposed Remote Desktop Protocol (RDP) 3389 | Medium | Network Exposure |
+| `windows.fs.writable-system-path` | Writable Directory in System PATH | High | Binary Hijacking |
+
+#### Windows Validation Policy & Tiers
+- **Native Verification:** Continuous integration executes on GitHub Actions `windows-latest` running the real Rust compiler, Clippy, and test suite on native Windows.
+- **In-Memory Regression Suite:** Deterministic unit and integration tests (`windows_compatibility_regression.rs`) verify end-to-end audit execution, finding scoring, redaction, and fail-closed rejections.
+- **Strict Isolation from Docker:** Docker containers on macOS or Linux cannot execute Windows binaries or test Windows kernel semantics. OpenAudit never claims native Windows validation based on Docker execution.
+
+### E. Fail-Closed Guarantees & Linux Engine Preservation
+
+- **Strict Fail-Closed Semantics:** On unsupported platforms (macOS M3.4 or unvalidated Linux/Windows distributions), OpenAudit rejects execution with typed `EngineError::UnsupportedPlatform` and records `CheckExecutionStatus::UnsupportedPlatform`. No synthetic or simulated audit data is ever returned.
 - **M2 Linux Engine Preservation:** The complete M2 Linux audit engine (20 built-in rules, privilege checks, `/proc`, `/sys`, and config collectors) operates identically through `LinuxPlatformBackend`, with 100% regression test coverage in the verified Ubuntu 24.04 LTS, Debian 12, and Debian 13 environments.
