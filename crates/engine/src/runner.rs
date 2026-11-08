@@ -400,17 +400,8 @@ mod tests {
 
         fn collect_context(&self) -> Result<crate::collector::HostInspectionContext, EngineError> {
             Ok(crate::collector::HostInspectionContext {
-                os: None,
-                ssh: None,
-                users: None,
-                listening_ports: Vec::new(),
-                firewall: None,
-                file_permissions: Vec::new(),
-                udp_ports: Vec::new(),
-                suid_binaries: Vec::new(),
-                sysctl: None,
-                path_entries: Vec::new(),
                 current_privilege: PrivilegeLevel::Unprivileged,
+                ..Default::default()
             })
         }
     }
@@ -466,17 +457,8 @@ mod tests {
 
         fn collect_context(&self) -> Result<crate::collector::HostInspectionContext, EngineError> {
             Ok(crate::collector::HostInspectionContext {
-                os: None,
-                ssh: None,
-                users: None,
-                listening_ports: Vec::new(),
-                firewall: None,
-                file_permissions: Vec::new(),
-                udp_ports: Vec::new(),
-                suid_binaries: Vec::new(),
-                sysctl: None,
-                path_entries: Vec::new(),
                 current_privilege: PrivilegeLevel::Unprivileged,
+                ..Default::default()
             })
         }
     }

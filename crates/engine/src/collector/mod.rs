@@ -9,6 +9,7 @@ pub mod ssh;
 pub mod suid;
 pub mod sysctl;
 pub mod users;
+pub mod windows;
 
 use crate::error::EngineError;
 use serde::{Deserialize, Serialize};
@@ -42,7 +43,22 @@ impl PrivilegeLevel {
             }
             Self::Unprivileged
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            if let Ok(output) = std::process::Command::new("whoami").arg("/groups").output() {
+                if let Ok(s) = std::str::from_utf8(&output.stdout) {
+                    // S-1-5-32-544 is BUILTIN\Administrators; high integrity denotes elevation
+                    if s.contains("S-1-5-32-544")
+                        || s.contains("High Mandatory Level")
+                        || s.contains("System Mandatory Level")
+                    {
+                        return Self::RootRequired;
+                    }
+                }
+            }
+            Self::Unprivileged
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             Self::Unprivileged
         }
@@ -212,6 +228,16 @@ pub struct HostInspectionContext {
     pub sysctl: Option<sysctl::SysctlInfo>,
     /// Inspected directory entries in the process `PATH`.
     pub path_entries: Vec<env::PathEntry>,
+    /// Windows Defender antivirus and endpoint protection state.
+    pub windows_defender: Option<windows::WindowsDefenderInfo>,
+    /// Windows Defender Firewall profiles.
+    pub windows_firewall: Option<windows::WindowsFirewallInfo>,
+    /// Security-related Windows registry settings.
+    pub windows_registry: Option<windows::WindowsRegistryInfo>,
+    /// Windows system service states.
+    pub windows_services: Option<windows::WindowsServicesInfo>,
+    /// Windows local user and administrative account posture.
+    pub windows_accounts: Option<windows::WindowsAccountsInfo>,
     /// Host execution privilege level at time of audit.
     pub current_privilege: PrivilegeLevel,
 }

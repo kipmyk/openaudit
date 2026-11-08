@@ -251,6 +251,7 @@ impl<FS: FileSystem + Send + Sync, CR: CommandRunner + Send + Sync> PlatformBack
             sysctl,
             path_entries,
             current_privilege,
+            ..Default::default()
         })
     }
 }
