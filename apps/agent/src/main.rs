@@ -23,8 +23,9 @@ use openaudit_core::protocol::tpm::{
     TpmMonotonicCounter, TpmProvisioningManager, UnixSocketTransport,
 };
 use openaudit_core::protocol::types::{
-    CatalogVersion, ChallengeNonce, EnrollmentGeneration, EnrollmentTokenId, LifecycleId,
-    MachineId, RequestId, RetrievalMessage, SharedSecret, SrkName, TimestampNs, TransactionId,
+    CatalogVersion, ChallengeNonce, EnrollmentGeneration, EnrollmentTokenId, EnrollmentTranscript,
+    LifecycleId, MachineId, RequestId, RetrievalMessage, SharedSecret, SrkName, TimestampNs,
+    TransactionId,
 };
 
 /// Default standard NIST P-256 SPKI DER public key structure (91 bytes).
@@ -245,6 +246,8 @@ fn print_help() {
           provision            Execute four-state TPM provisioning lifecycle\n  \
           enroll               Assemble 14-element enrollment transcript and sign HMAC proof\n  \
           retrieve             Assemble 5-element retrieval request (89 bytes) and sign HMAC proof\n  \
+          enroll-tls           Perform attestation and enrollment over TLS 1.3\n  \
+          retrieve-tls         Retrieve assessment catalog over TLS 1.3 with replay protection\n  \
           version              Print version information\n  \
           help                 Print this help message\n\n\
         Options:\n  \
@@ -497,6 +500,398 @@ fn run_enroll(args: &[String]) -> Result<(), String> {
     let s_path = secret_path.unwrap_or_else(|| s_dir.join("tpm-auth.secret"));
     let secret_bytes = read_strict_secret_file(&s_path)?;
 
+    let (transcript, proof) = prepare_enrollment_transcript(
+        &s_dir,
+        &t_path,
+        token_id,
+        nonce,
+        tx_id_arg.as_deref(),
+        secret_bytes,
+        catalog_base_arg,
+        expires_at_arg,
+        ttl_secs_arg,
+    )?;
+
+    let canonical_bytes = transcript
+        .serialize_canonical()
+        .map_err(|err| format!("failed to serialize transcript: {err}"))?;
+
+    println!("ENROLLMENT_TRANSCRIPT: {}", encode_hex(&canonical_bytes));
+    println!("HMAC_PROOF: {}", encode_hex(&proof));
+    println!("MACHINE_ID: {}", transcript.machine_id);
+    println!("TOKEN_ID: {}", encode_hex(transcript.token_id.as_bytes()));
+    println!("COUNTER_BASE: {}", transcript.counter_base.as_u64());
+
+    Ok(())
+}
+
+fn run_retrieve(args: &[String]) -> Result<(), String> {
+    let mut machine_id_arg: Option<String> = None;
+    let mut tx_id_arg: Option<String> = None;
+    let mut secret_path: Option<PathBuf> = None;
+    let mut state_dir: Option<PathBuf> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--machine-id" | "--machine" => {
+                i += 1;
+                if i < args.len() {
+                    machine_id_arg = Some(args[i].clone());
+                }
+            }
+            "--tx-id" => {
+                i += 1;
+                if i < args.len() {
+                    tx_id_arg = Some(args[i].clone());
+                }
+            }
+            "--secret-file" => {
+                i += 1;
+                if i < args.len() {
+                    secret_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--state-dir" => {
+                i += 1;
+                if i < args.len() {
+                    state_dir = Some(PathBuf::from(&args[i]));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let (msg, raw_payload, proof) = prepare_retrieval_request(
+        state_dir.as_deref(),
+        secret_path.as_deref(),
+        tx_id_arg.as_deref(),
+        machine_id_arg.as_deref(),
+    )?;
+
+    println!("RETRIEVAL_REQUEST: {}", encode_hex(&raw_payload));
+    println!("HMAC_PROOF: {}", encode_hex(&proof));
+    println!("MACHINE_ID: {}", msg.machine_id);
+    println!("TX_ID: {}", msg.tx_id);
+    println!("REQ_ID: {}", msg.req_id);
+    println!("T_REQ: {}", msg.t_req.as_nanos());
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_enroll_tls(args: &[String]) -> Result<(), String> {
+    let mut server_addr: Option<String> = None;
+    let mut server_name = "localhost".to_string();
+    let mut ca_cert_path: Option<PathBuf> = None;
+    let mut tpm_path: Option<PathBuf> = None;
+    let mut state_dir: Option<PathBuf> = None;
+    let mut token_id_hex: Option<String> = None;
+    let mut nonce_hex: Option<String> = None;
+    let mut secret_path: Option<PathBuf> = None;
+    let mut tx_id_arg: Option<String> = None;
+    let mut catalog_base_arg: u64 = 1;
+    let mut expires_at_arg: Option<i64> = None;
+    let mut ttl_secs_arg: u64 = 60;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--server" => {
+                i += 1;
+                if i < args.len() {
+                    server_addr = Some(args[i].clone());
+                }
+            }
+            "--server-name" => {
+                i += 1;
+                if i < args.len() {
+                    server_name.clone_from(&args[i]);
+                }
+            }
+            "--ca-cert" => {
+                i += 1;
+                if i < args.len() {
+                    ca_cert_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--tpm" => {
+                i += 1;
+                if i < args.len() {
+                    tpm_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--state-dir" => {
+                i += 1;
+                if i < args.len() {
+                    state_dir = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--token-id" => {
+                i += 1;
+                if i < args.len() {
+                    token_id_hex = Some(args[i].clone());
+                }
+            }
+            "--nonce" => {
+                i += 1;
+                if i < args.len() {
+                    nonce_hex = Some(args[i].clone());
+                }
+            }
+            "--secret-file" => {
+                i += 1;
+                if i < args.len() {
+                    secret_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--transaction-id" | "--tx-id" => {
+                i += 1;
+                if i < args.len() {
+                    tx_id_arg = Some(args[i].clone());
+                }
+            }
+            "--catalog-base" => {
+                i += 1;
+                if i < args.len() {
+                    if let Ok(v) = args[i].parse::<u64>() {
+                        catalog_base_arg = v;
+                    }
+                }
+            }
+            "--expires-at-ns" => {
+                i += 1;
+                if i < args.len() {
+                    expires_at_arg = args[i].parse::<i64>().ok();
+                }
+            }
+            "--ttl-secs" => {
+                i += 1;
+                if i < args.len() {
+                    if let Ok(v) = args[i].parse::<u64>() {
+                        ttl_secs_arg = v;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let s_addr =
+        server_addr.ok_or_else(|| "missing mandatory argument: --server <ADDR>".to_string())?;
+    let ca_path =
+        ca_cert_path.ok_or_else(|| "missing mandatory argument: --ca-cert <PATH>".to_string())?;
+    let tok_hex =
+        token_id_hex.ok_or_else(|| "missing mandatory argument: --token-id <HEX>".to_string())?;
+    let non_hex =
+        nonce_hex.ok_or_else(|| "missing mandatory argument: --nonce <HEX>".to_string())?;
+    let s_dir =
+        state_dir.ok_or_else(|| "missing mandatory argument: --state-dir <DIR>".to_string())?;
+    let t_path = resolve_tpm_device_path(tpm_path.as_deref());
+
+    let token_bytes = decode_hex_16(&tok_hex)?;
+    let token_id = EnrollmentTokenId::from_bytes(token_bytes);
+    let nonce_bytes = decode_hex_32(&non_hex)?;
+    let nonce = ChallengeNonce::from_bytes(nonce_bytes);
+
+    let sec_path = secret_path.unwrap_or_else(|| s_dir.join("tpm-auth.secret"));
+    let secret_bytes = read_strict_secret_file(&sec_path)?;
+
+    let (transcript, proof) = prepare_enrollment_transcript(
+        &s_dir,
+        &t_path,
+        token_id,
+        nonce,
+        tx_id_arg.as_deref(),
+        secret_bytes,
+        catalog_base_arg,
+        expires_at_arg,
+        ttl_secs_arg,
+    )?;
+
+    let canonical_bytes = transcript
+        .serialize_canonical()
+        .map_err(|err| format!("failed to serialize transcript: {err}"))?;
+    let transcript_hex = encode_hex(&canonical_bytes);
+    let proof_hex = encode_hex(&proof);
+
+    let root_certs = openaudit_core::protocol::load_certificates_from_file(&ca_path)
+        .map_err(|err| format!("failed to load CA certificates: {err}"))?;
+    let client_config = openaudit_core::protocol::build_tls13_client_config(root_certs)
+        .map_err(|err| format!("failed to build TLS 1.3 client config: {err}"))?;
+    let client_config = Arc::new(client_config);
+
+    let mut transport =
+        openaudit_core::protocol::TlsClientTransport::connect(&s_addr, &server_name, client_config)
+            .map_err(|err| format!("TLS 1.3 connection to '{s_addr}' failed: {err}"))?;
+
+    let req = openaudit_core::protocol::TlsProtocolRequest::Enrollment {
+        transcript_hex,
+        hmac_proof_hex: proof_hex,
+    };
+
+    let resp = transport
+        .exchange(&req)
+        .map_err(|err| format!("TLS exchange failed: {err}"))?;
+
+    match resp {
+        openaudit_core::protocol::TlsProtocolResponse::Success { payload } => {
+            println!("TLS_ENROLL: SUCCESS");
+            if let Some(mach) = payload.get("machine_id").and_then(|v| v.as_str()) {
+                println!("MACHINE_ID: {mach}");
+            }
+            if let Some(tx) = payload.get("tx_id").and_then(|v| v.as_str()) {
+                println!("TRANSACTION_ID: {tx}");
+                let _ = fs::write(s_dir.join("tx_id.txt"), tx);
+            }
+            Ok(())
+        }
+        openaudit_core::protocol::TlsProtocolResponse::Error { code, message } => {
+            Err(format!("server rejected enrollment ({code}): {message}"))
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_retrieve_tls(args: &[String]) -> Result<(), String> {
+    let mut server_addr: Option<String> = None;
+    let mut server_name = "localhost".to_string();
+    let mut ca_cert_path: Option<PathBuf> = None;
+    let mut state_dir: Option<PathBuf> = None;
+    let mut secret_path: Option<PathBuf> = None;
+    let mut tx_id_arg: Option<String> = None;
+    let mut machine_id_arg: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--server" => {
+                i += 1;
+                if i < args.len() {
+                    server_addr = Some(args[i].clone());
+                }
+            }
+            "--server-name" => {
+                i += 1;
+                if i < args.len() {
+                    server_name.clone_from(&args[i]);
+                }
+            }
+            "--ca-cert" => {
+                i += 1;
+                if i < args.len() {
+                    ca_cert_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--state-dir" => {
+                i += 1;
+                if i < args.len() {
+                    state_dir = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--secret-file" => {
+                i += 1;
+                if i < args.len() {
+                    secret_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--transaction-id" | "--tx-id" => {
+                i += 1;
+                if i < args.len() {
+                    tx_id_arg = Some(args[i].clone());
+                }
+            }
+            "--machine-id" => {
+                i += 1;
+                if i < args.len() {
+                    machine_id_arg = Some(args[i].clone());
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let s_addr =
+        server_addr.ok_or_else(|| "missing mandatory argument: --server <ADDR>".to_string())?;
+    let ca_path =
+        ca_cert_path.ok_or_else(|| "missing mandatory argument: --ca-cert <PATH>".to_string())?;
+
+    let tx_str_stored = if tx_id_arg.is_none() {
+        state_dir.as_ref().and_then(|d| {
+            let t_path = d.join("tx_id.txt");
+            if t_path.is_file() {
+                fs::read_to_string(&t_path).ok()
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    let effective_tx = tx_id_arg
+        .as_deref()
+        .or_else(|| tx_str_stored.as_deref().map(str::trim));
+
+    let (msg, raw_payload, proof) = prepare_retrieval_request(
+        state_dir.as_deref(),
+        secret_path.as_deref(),
+        effective_tx,
+        machine_id_arg.as_deref(),
+    )?;
+
+    let root_certs = openaudit_core::protocol::load_certificates_from_file(&ca_path)
+        .map_err(|err| format!("failed to load CA certificates: {err}"))?;
+    let client_config = openaudit_core::protocol::build_tls13_client_config(root_certs)
+        .map_err(|err| format!("failed to build TLS 1.3 client config: {err}"))?;
+    let client_config = Arc::new(client_config);
+
+    let mut transport =
+        openaudit_core::protocol::TlsClientTransport::connect(&s_addr, &server_name, client_config)
+            .map_err(|err| format!("TLS 1.3 connection to '{s_addr}' failed: {err}"))?;
+
+    let req = openaudit_core::protocol::TlsProtocolRequest::Retrieval {
+        retrieval_message_hex: encode_hex(&raw_payload),
+        hmac_proof_hex: encode_hex(&proof),
+    };
+
+    let resp = transport
+        .exchange(&req)
+        .map_err(|err| format!("TLS exchange failed: {err}"))?;
+
+    match resp {
+        openaudit_core::protocol::TlsProtocolResponse::Success { payload } => {
+            println!("TLS_RETRIEVE: SUCCESS");
+            println!("MACHINE_ID: {}", msg.machine_id);
+            println!("REQUEST_ID: {}", msg.req_id);
+            if let Some(cat) = payload.get("catalog") {
+                #[allow(clippy::redundant_closure_for_method_calls)]
+                if let Some(ver) = cat.get("version").and_then(|v| v.as_u64()) {
+                    println!("CATALOG_VERSION: {ver}");
+                }
+            }
+            Ok(())
+        }
+        openaudit_core::protocol::TlsProtocolResponse::Error { code, message } => {
+            Err(format!("server rejected retrieval ({code}): {message}"))
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_enrollment_transcript(
+    s_dir: &Path,
+    t_path: &Path,
+    token_id: EnrollmentTokenId,
+    nonce: ChallengeNonce,
+    tx_id_arg: Option<&str>,
+    secret_bytes: [u8; 32],
+    catalog_base_arg: u64,
+    expires_at_arg: Option<i64>,
+    ttl_secs_arg: u64,
+) -> Result<(EnrollmentTranscript, [u8; 32]), String> {
     // Load machine ID
     let machine_id_path = s_dir.join("machine_id.txt");
     let machine_id = if machine_id_path.is_file() {
@@ -568,12 +963,12 @@ fn run_enroll(args: &[String]) -> Result<(), String> {
     };
 
     let tx_id = if let Some(t_str) = tx_id_arg {
-        TransactionId::parse(&t_str).map_err(|err| format!("invalid --tx-id: {err}"))?
+        TransactionId::parse(t_str).map_err(|err| format!("invalid --tx-id: {err}"))?
     } else {
         TransactionId::new()
     };
 
-    let counter = Arc::new(Mutex::new(open_monotonic_counter(&t_path)));
+    let counter = Arc::new(Mutex::new(open_monotonic_counter(t_path)));
     let creds = AgentCredentials {
         machine_id,
         shared_secret: SharedSecret::from_bytes(secret_bytes),
@@ -610,65 +1005,22 @@ fn run_enroll(args: &[String]) -> Result<(), String> {
         )
         .map_err(|err| format!("enrollment transcript construction failed: {err}"))?;
 
-    let canonical_bytes = transcript
-        .serialize_canonical()
-        .map_err(|err| format!("failed to serialize transcript: {err}"))?;
-
-    println!("ENROLLMENT_TRANSCRIPT: {}", encode_hex(&canonical_bytes));
-    println!("HMAC_PROOF: {}", encode_hex(&proof));
-    println!("MACHINE_ID: {}", transcript.machine_id);
-    println!("TOKEN_ID: {}", encode_hex(transcript.token_id.as_bytes()));
-    println!("COUNTER_BASE: {}", transcript.counter_base.as_u64());
-
-    Ok(())
+    Ok((transcript, proof))
 }
 
-fn run_retrieve(args: &[String]) -> Result<(), String> {
-    let mut machine_id_arg: Option<String> = None;
-    let mut tx_id_arg: Option<String> = None;
-    let mut secret_path: Option<PathBuf> = None;
-    let mut state_dir: Option<PathBuf> = None;
-
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--machine-id" | "--machine" => {
-                i += 1;
-                if i < args.len() {
-                    machine_id_arg = Some(args[i].clone());
-                }
-            }
-            "--tx-id" => {
-                i += 1;
-                if i < args.len() {
-                    tx_id_arg = Some(args[i].clone());
-                }
-            }
-            "--secret-file" => {
-                i += 1;
-                if i < args.len() {
-                    secret_path = Some(PathBuf::from(&args[i]));
-                }
-            }
-            "--state-dir" => {
-                i += 1;
-                if i < args.len() {
-                    state_dir = Some(PathBuf::from(&args[i]));
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-
+fn prepare_retrieval_request(
+    state_dir: Option<&Path>,
+    secret_path: Option<&Path>,
+    tx_id_arg: Option<&str>,
+    machine_id_arg: Option<&str>,
+) -> Result<(RetrievalMessage, Vec<u8>, [u8; 32]), String> {
     let tx_str =
         tx_id_arg.ok_or_else(|| "missing mandatory argument: --tx-id <UUID>".to_string())?;
-    let tx_id = TransactionId::parse(&tx_str).map_err(|err| format!("invalid --tx-id: {err}"))?;
+    let tx_id = TransactionId::parse(tx_str).map_err(|err| format!("invalid --tx-id: {err}"))?;
 
-    // Determine secret file
     let s_path = if let Some(p) = secret_path {
-        p
-    } else if let Some(ref d) = state_dir {
+        p.to_path_buf()
+    } else if let Some(d) = state_dir {
         d.join("tpm-auth.secret")
     } else {
         return Err(
@@ -678,10 +1030,9 @@ fn run_retrieve(args: &[String]) -> Result<(), String> {
     };
     let secret = read_strict_secret_file(&s_path)?;
 
-    // Determine machine ID
     let machine_id = if let Some(m_str) = machine_id_arg {
-        MachineId::parse(&m_str).map_err(|err| format!("invalid --machine-id: {err}"))?
-    } else if let Some(ref d) = state_dir {
+        MachineId::parse(m_str).map_err(|err| format!("invalid --machine-id: {err}"))?
+    } else if let Some(d) = state_dir {
         let m_path = d.join("machine_id.txt");
         let content = fs::read_to_string(&m_path)
             .map_err(|err| format!("failed to read machine_id.txt: {err}"))?;
@@ -706,14 +1057,7 @@ fn run_retrieve(args: &[String]) -> Result<(), String> {
     let raw_payload = msg.serialize_canonical();
     let proof = compute_hmac_sha256(&SharedSecret::from_bytes(secret), &raw_payload);
 
-    println!("RETRIEVAL_REQUEST: {}", encode_hex(&raw_payload));
-    println!("HMAC_PROOF: {}", encode_hex(&proof));
-    println!("MACHINE_ID: {machine_id}");
-    println!("TX_ID: {tx_id}");
-    println!("REQ_ID: {req_id}");
-    println!("T_REQ: {}", t_req.as_nanos());
-
-    Ok(())
+    Ok((msg, raw_payload.to_vec(), proof))
 }
 
 /// Dispatches command line arguments to subcommands.
@@ -738,6 +1082,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "provision" => run_provision(&args[2..]),
         "enroll" => run_enroll(&args[2..]),
         "retrieve" => run_retrieve(&args[2..]),
+        "enroll-tls" => run_enroll_tls(&args[2..]),
+        "retrieve-tls" => run_retrieve_tls(&args[2..]),
         other => Err(format!("unknown command: '{other}'")),
     }
 }
