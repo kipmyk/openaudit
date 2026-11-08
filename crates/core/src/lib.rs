@@ -14,6 +14,7 @@ pub mod error;
 pub mod evidence;
 pub mod finding;
 pub mod id;
+pub mod protocol;
 pub mod scan;
 pub mod severity;
 
