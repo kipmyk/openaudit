@@ -123,7 +123,42 @@ Inspection of authorized external infrastructure without software installation:
 
 ---
 
-## 6. Development & Verification
+## 6. Standalone Production Packages & Distribution
+
+OpenAudit is distributed as **self-contained production packages** that require **no Rust, Cargo, Node.js, npm, or development toolchains** on target systems.
+
+### Installation Options
+
+#### Linux (Debian / Ubuntu Native Package)
+Download the `.deb` package and install via `dpkg`:
+```bash
+sudo dpkg -i openaudit_0.1.0-alpha.0_amd64.deb    # or _arm64.deb
+openaudit version
+openaudit scan --profile baseline
+```
+
+#### Linux / macOS (Portable Archive)
+Extract the `.tar.gz` archive to any directory or `/usr/local`:
+```bash
+tar -xzf openaudit-0.1.0-alpha.0-linux-x86_64.tar.gz
+./openaudit scan --format human
+./openaudit report --format html --output report.html
+```
+
+#### Windows (Portable Distribution)
+Extract `openaudit-0.1.0-alpha.0-windows-x86_64.zip` in PowerShell:
+```powershell
+Expand-Archive openaudit-0.1.0-alpha.0-windows-x86_64.zip -DestinationPath "C:\OpenAudit"
+cd C:\OpenAudit\bin
+.\openaudit.exe scan --format human
+```
+
+For complete packaging architecture, runtime dependency analysis, and clean-environment test evidence, see:
+- [Packaging, Distribution, and Runtime Independence Specification](docs/PACKAGING-AND-DISTRIBUTION.md)
+
+---
+
+## 7. Development & Verification
 
 ### Prerequisites
 - Rust stable (matching `rust-toolchain.toml`)
@@ -143,10 +178,11 @@ cargo test
 
 ---
 
-## 7. Documentation Index
+## 8. Documentation Index
 
 ### Core Architecture & Foundations
 - [Architecture Design & Technical Decisions](docs/ARCHITECTURE.md)
+- [Packaging, Distribution, and Runtime Independence Specification](docs/PACKAGING-AND-DISTRIBUTION.md)
 - [Threat Model & Security Boundaries](docs/THREAT-MODEL.md)
 - [PostgreSQL Multi-Tenant Data Model](docs/DATA-MODEL.md)
 - [CLI Contracts & Command Reference](docs/CLI-CONTRACTS.md)
@@ -164,6 +200,6 @@ cargo test
 
 ---
 
-## 8. License
+## 9. License
 
 OpenAudit is licensed under the [Apache License, Version 2.0](LICENSE).
