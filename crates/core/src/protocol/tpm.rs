@@ -6,7 +6,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -147,6 +147,38 @@ impl TpmTransport for UnixSocketTransport {
     }
 }
 
+/// Standard Linux TPM 2.0 in-kernel resource manager device path.
+pub const DEFAULT_LINUX_TPM_RM_PATH: &str = "/dev/tpmrm0";
+
+/// Fallback Linux TPM 2.0 raw character device path (single-client concurrency limit).
+pub const FALLBACK_LINUX_TPM_RAW_PATH: &str = "/dev/tpm0";
+
+/// Resolves the TPM character device path according to the Linux operational specification.
+///
+/// If an explicit path is provided via `explicit_path`, that path is returned directly.
+/// Otherwise, checks for `/dev/tpmrm0` (TPM 2.0 in-kernel resource manager).
+/// If `/dev/tpmrm0` is absent, checks for `/dev/tpm0` (raw TPM character device).
+/// If neither is present, returns the default `/dev/tpmrm0` path so subsequent connection
+/// attempts produce diagnostic kernel driver guidance.
+#[must_use]
+pub fn resolve_tpm_device_path(explicit_path: Option<&Path>) -> PathBuf {
+    if let Some(p) = explicit_path {
+        return p.to_path_buf();
+    }
+
+    let rm_path = Path::new(DEFAULT_LINUX_TPM_RM_PATH);
+    if rm_path.exists() {
+        return rm_path.to_path_buf();
+    }
+
+    let raw_path = Path::new(FALLBACK_LINUX_TPM_RAW_PATH);
+    if raw_path.exists() {
+        return raw_path.to_path_buf();
+    }
+
+    rm_path.to_path_buf()
+}
+
 /// Transport connecting to a character device (e.g. `/dev/tpmrm0` or `/dev/tpm0`).
 pub struct DeviceTransport {
     path: PathBuf,
@@ -172,17 +204,88 @@ impl DeviceTransport {
         }
     }
 
+    /// Validates the device node existence, file type, and permissions before opening.
+    ///
+    /// # Errors
+    /// Returns [`ProtocolError::TpmError`] with diagnostic guidance if:
+    /// - Node does not exist (`ENOENT`)
+    /// - Permission is denied (`EACCES`)
+    /// - Node is not a character device (regular file, directory, FIFO, etc.)
+    pub fn validate_device_node(path: &Path) -> Result<(), ProtocolError> {
+        let meta = match std::fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(err) => match err.kind() {
+                std::io::ErrorKind::NotFound => {
+                    return Err(ProtocolError::TpmError(format!(
+                        "TPM 2.0 device node not found at '{}': verify hardware TPM is enabled in UEFI/firmware and Linux kernel drivers ('tpm_tis', 'tpm_crb', 'tpm_vtpm') are loaded",
+                        path.display()
+                    )));
+                }
+                std::io::ErrorKind::PermissionDenied => {
+                    return Err(ProtocolError::TpmError(format!(
+                        "permission denied accessing TPM device node metadata at '{}': ensure process user belongs to 'tss' or 'openaudit' group (see packaging/udev/99-openaudit-tpm.rules)",
+                        path.display()
+                    )));
+                }
+                _ => {
+                    return Err(ProtocolError::TpmError(format!(
+                        "failed to stat TPM device node at '{}': {err}",
+                        path.display()
+                    )));
+                }
+            },
+        };
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileTypeExt;
+            let ft = meta.file_type();
+            if !ft.is_char_device() {
+                return Err(ProtocolError::TpmError(format!(
+                    "invalid TPM device node at '{}': expected character device (S_IFCHR), but found non-character file type (is_file={}, is_dir={}, is_fifo={})",
+                    path.display(),
+                    ft.is_file(),
+                    ft.is_dir(),
+                    ft.is_fifo()
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     fn ensure_opened(&mut self) -> Result<&mut File, ProtocolError> {
         if self.device.is_none() {
+            Self::validate_device_node(&self.path)?;
+
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .open(&self.path)
-                .map_err(|err| {
-                    ProtocolError::TpmError(format!(
-                        "failed to open TPM device node at '{}': {err}",
+                .map_err(|err| match err.kind() {
+                    std::io::ErrorKind::PermissionDenied => ProtocolError::TpmError(format!(
+                        "permission denied opening TPM device node at '{}': ensure process user belongs to 'tss' or 'openaudit' group (see packaging/udev/99-openaudit-tpm.rules)",
                         self.path.display()
-                    ))
+                    )),
+                    std::io::ErrorKind::NotFound => ProtocolError::TpmError(format!(
+                        "TPM 2.0 device node not found at '{}': verify hardware TPM is enabled and Linux kernel drivers ('tpm_tis', 'tpm_crb') are loaded",
+                        self.path.display()
+                    )),
+                    _ => {
+                        let raw_code = err.raw_os_error();
+                        if raw_code == Some(16) {
+                            // EBUSY on Unix
+                            ProtocolError::TpmError(format!(
+                                "TPM device node at '{}' is busy (EBUSY): exclusive access held by another process; use '/dev/tpmrm0' for concurrent multiplexing",
+                                self.path.display()
+                            ))
+                        } else {
+                            ProtocolError::TpmError(format!(
+                                "failed to open TPM device node at '{}': {err}",
+                                self.path.display()
+                            ))
+                        }
+                    }
                 })?;
             self.device = Some(file);
         }

@@ -36,9 +36,10 @@ pub use crypto::{
 pub use error::ProtocolError;
 pub use replay::{SqliteReplayStore, CURRENT_SCHEMA_VERSION};
 pub use tpm::{
-    DeviceTransport, NvPublicInfo, ProvisioningState, TpmClient, TpmCounterConfig,
-    TpmMonotonicCounter, TpmProvisioningManager, TpmTransport, UnixSocketTransport,
-    DEFAULT_NV_COUNTER_INDEX, DEFAULT_NV_LIFECYCLE_INDEX, NV_COUNTER_ATTRIBUTES,
+    resolve_tpm_device_path, DeviceTransport, NvPublicInfo, ProvisioningState, TpmClient,
+    TpmCounterConfig, TpmMonotonicCounter, TpmProvisioningManager, TpmTransport,
+    UnixSocketTransport, DEFAULT_LINUX_TPM_RM_PATH, DEFAULT_NV_COUNTER_INDEX,
+    DEFAULT_NV_LIFECYCLE_INDEX, FALLBACK_LINUX_TPM_RAW_PATH, NV_COUNTER_ATTRIBUTES,
     NV_LIFECYCLE_ATTRIBUTES,
 };
 pub use traits::{CryptoHasher, KeyMetadata, MacVerifier, ReplayStore, SpkiValidator};
