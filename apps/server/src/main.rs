@@ -16,7 +16,8 @@ use openaudit_core::protocol::catalog::{
 };
 use openaudit_core::protocol::error::ProtocolError;
 use openaudit_core::protocol::tpm::{
-    DeviceTransport, TpmClient, TpmCounterConfig, TpmMonotonicCounter, UnixSocketTransport,
+    resolve_tpm_device_path, DeviceTransport, TpmClient, TpmCounterConfig, TpmMonotonicCounter,
+    UnixSocketTransport,
 };
 use openaudit_core::protocol::trust::UnverifiedRetrievalRequest;
 use openaudit_core::protocol::types::{
@@ -47,20 +48,26 @@ impl MonotonicCounter for ServerMonotonicCounter {
     }
 }
 
-/// Opens a hardware character device or software socket as a [`ServerMonotonicCounter`].
-fn open_monotonic_counter(tpm_path: &Path) -> ServerMonotonicCounter {
+fn is_socket_path(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
-        if let Ok(meta) = fs::metadata(tpm_path) {
-            if meta.file_type().is_char_device() {
-                let client = TpmClient::new(DeviceTransport::new(tpm_path));
-                return ServerMonotonicCounter::Device(TpmMonotonicCounter::new(
-                    client,
-                    TpmCounterConfig::default(),
-                ));
-            }
+        if let Ok(meta) = fs::metadata(path) {
+            return meta.file_type().is_socket();
         }
+    }
+    let p_str = path.to_string_lossy();
+    p_str.ends_with(".sock") || p_str.contains("/sock")
+}
+
+/// Opens a hardware character device or software socket as a [`ServerMonotonicCounter`].
+fn open_monotonic_counter(tpm_path: &Path) -> ServerMonotonicCounter {
+    if !is_socket_path(tpm_path) {
+        let client = TpmClient::new(DeviceTransport::new(tpm_path));
+        return ServerMonotonicCounter::Device(TpmMonotonicCounter::new(
+            client,
+            TpmCounterConfig::default(),
+        ));
     }
 
     let client = TpmClient::new(UnixSocketTransport::new(tpm_path));
@@ -538,8 +545,7 @@ fn run_authority_catalog_update(args: &[String]) -> Result<(), String> {
 
     let c_path = candidate_path
         .ok_or_else(|| "missing mandatory argument: --candidate <PATH>".to_string())?;
-    let t_path =
-        tpm_path.ok_or_else(|| "missing mandatory argument: --tpm <PATH_OR_SOCKET>".to_string())?;
+    let t_path = resolve_tpm_device_path(tpm_path.as_deref());
 
     let candidate_bytes = fs::read(&c_path).map_err(|err| {
         format!(
@@ -586,8 +592,7 @@ fn run_authority_recover_catalog(args: &[String]) -> Result<(), String> {
         i += 1;
     }
 
-    let t_path =
-        tpm_path.ok_or_else(|| "missing mandatory argument: --tpm <PATH_OR_SOCKET>".to_string())?;
+    let t_path = resolve_tpm_device_path(tpm_path.as_deref());
 
     let counter = open_monotonic_counter(&t_path);
 
@@ -1089,5 +1094,53 @@ mod tests {
         // Second init must fail because active catalog already exists
         let res2 = run(&init_args);
         assert!(res2.is_err(), "second catalog-init must fail: {res2:?}");
+    }
+
+    #[test]
+    fn test_server_default_tpmrm_resolution_diagnostic() {
+        let temp = TestDir::new();
+        let data_dir = temp.path().join("authority_data");
+
+        // Initialize base catalog first
+        let init_args = vec![
+            "openaudit-server".to_string(),
+            "authority".to_string(),
+            "catalog-init".to_string(),
+            "--data-dir".to_string(),
+            data_dir.to_str().unwrap().to_string(),
+        ];
+        run(&init_args).expect("base catalog init must succeed");
+
+        // Create a dummy candidate catalog
+        let candidate_path = temp.path().join("candidate.json");
+        let candidate = AssessmentCatalog::new(2, 2, serde_json::json!({"v": 2})).unwrap();
+        fs::write(
+            &candidate_path,
+            serde_json::to_vec_pretty(&candidate).unwrap(),
+        )
+        .unwrap();
+
+        // Catalog update without --tpm defaults to /dev/tpmrm0 (or /dev/tpm0)
+        let update_args = vec![
+            "openaudit-server".to_string(),
+            "authority".to_string(),
+            "catalog-update".to_string(),
+            "--candidate".to_string(),
+            candidate_path.to_str().unwrap().to_string(),
+            "--data-dir".to_string(),
+            data_dir.to_str().unwrap().to_string(),
+        ];
+
+        let res = run(&update_args);
+        if !Path::new("/dev/tpmrm0").exists() && !Path::new("/dev/tpm0").exists() {
+            assert!(res.is_err(), "must fail when hardware TPM device is absent");
+            let err = res.err().unwrap();
+            assert!(
+                err.contains("TPM 2.0 device node not found")
+                    || err.contains("failed to open TPM device node")
+                    || err.contains("TPM socket connect failed"),
+                "error must provide diagnostic context: {err}"
+            );
+        }
     }
 }
