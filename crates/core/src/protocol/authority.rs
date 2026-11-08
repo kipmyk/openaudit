@@ -7,79 +7,36 @@
 //!    (timestamp skew check -> HMAC proof verification -> atomic `SQLite` WAL replay consumption).
 //! 4. Assessment catalog update durability transactions and monotonic counter synchronization.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::protocol::catalog::{
     AssessmentCatalog, CatalogManager, MonotonicCounter, RecoveryOutcome,
 };
 use crate::protocol::crypto::{RustCryptoMacVerifier, RustCryptoSpkiValidator};
 use crate::protocol::error::ProtocolError;
-use crate::protocol::traits::{KeyMetadata, MacVerifier, ReplayStore, SpkiValidator};
+pub use crate::protocol::traits::{AuthorityStore, IssuedTokenRecord, VerifiedEnrollment};
+use crate::protocol::traits::{MacVerifier, ReplayStore, SpkiValidator};
 use crate::protocol::trust::{
     UnverifiedRetrievalRequest, VerifiedRetrievalRequest, MAX_CLOCK_SKEW_NANOS,
 };
 use crate::protocol::types::{
-    CatalogVersion, ChallengeNonce, CounterValue, EnrollmentGeneration, EnrollmentTokenId,
-    EnrollmentTranscript, LifecycleId, MachineId, SharedSecret, SrkName, TimestampNs,
-    TransactionId,
+    ChallengeNonce, EnrollmentGeneration, EnrollmentTokenId, EnrollmentTranscript, MachineId,
+    SharedSecret, TimestampNs,
 };
-
-/// Record representing an issued, single-use enrollment authorization token.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IssuedTokenRecord {
-    /// Unique identifier for the enrollment token.
-    pub token_id: EnrollmentTokenId,
-    /// Targeted machine identifier authorized to consume this token.
-    pub machine_id: MachineId,
-    /// Expected cryptographic challenge nonce issued to the node.
-    pub expected_nonce: ChallengeNonce,
-    /// Expected enrollment generation for this machine.
-    pub expected_generation: EnrollmentGeneration,
-    /// Absolute expiration timestamp for this token in Unix nanoseconds.
-    pub expires_at: TimestampNs,
-    /// Whether this token has been consumed by a verified enrollment.
-    pub consumed: bool,
-}
-
-/// Cryptographically verified and registered machine enrollment record.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedEnrollment {
-    /// Monitored machine hardware identifier.
-    pub machine_id: MachineId,
-    /// Consumed enrollment authorization token identifier.
-    pub token_id: EnrollmentTokenId,
-    /// Authority transaction identifier.
-    pub tx_id: TransactionId,
-    /// TPM NV lifecycle random identifier.
-    pub lifecycle_id: LifecycleId,
-    /// TPM Storage Root Key Name.
-    pub name_srk: SrkName,
-    /// Machine enrollment generation.
-    pub generation: EnrollmentGeneration,
-    /// Initial hardware counter baseline.
-    pub counter_base: CounterValue,
-    /// Initial catalog version baseline.
-    pub catalog_base: CatalogVersion,
-    /// Validated public key metadata.
-    pub key_metadata: KeyMetadata,
-    /// Timestamp at which enrollment was verified.
-    pub enrolled_at: TimestampNs,
-}
 
 /// High-level Authority service orchestrating OpenAudit attestation and outbox retrieval.
 pub struct AuthorityService {
+    authority_store: Arc<dyn AuthorityStore>,
     replay_store: Arc<dyn ReplayStore>,
     catalog_manager: Arc<CatalogManager>,
     mac_verifier: RustCryptoMacVerifier,
     spki_validator: RustCryptoSpkiValidator,
-    tokens: Mutex<HashMap<EnrollmentTokenId, IssuedTokenRecord>>,
-    registered_machines: Mutex<HashMap<MachineId, VerifiedEnrollment>>,
 }
 
 impl std::fmt::Debug for AuthorityService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AuthorityService")
+            .field("authority_store", &self.authority_store)
             .field("replay_store", &self.replay_store)
             .field("catalog_manager", &self.catalog_manager)
             .finish_non_exhaustive()
@@ -87,24 +44,34 @@ impl std::fmt::Debug for AuthorityService {
 }
 
 impl AuthorityService {
-    /// Creates a new Authority service backed by `replay_store` and `catalog_manager`.
+    /// Creates a new Authority service backed by `authority_store`, `replay_store`, and `catalog_manager`.
     #[must_use]
-    pub fn new(replay_store: Arc<dyn ReplayStore>, catalog_manager: Arc<CatalogManager>) -> Self {
+    pub fn new(
+        authority_store: Arc<dyn AuthorityStore>,
+        replay_store: Arc<dyn ReplayStore>,
+        catalog_manager: Arc<CatalogManager>,
+    ) -> Self {
         Self {
+            authority_store,
             replay_store,
             catalog_manager,
             mac_verifier: RustCryptoMacVerifier,
             spki_validator: RustCryptoSpkiValidator,
-            tokens: Mutex::new(HashMap::new()),
-            registered_machines: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Returns a reference to the underlying [`AuthorityStore`].
+    #[must_use]
+    pub fn authority_store(&self) -> &Arc<dyn AuthorityStore> {
+        &self.authority_store
     }
 
     /// Issues a fresh single-use enrollment authorization token for `machine_id`.
     ///
+    /// The token is immediately persisted to the underlying [`AuthorityStore`] before returning.
+    ///
     /// # Errors
-    /// Returns [`ProtocolError`] if timestamp calculations overflow.
-    #[allow(clippy::significant_drop_tightening)]
+    /// Returns [`ProtocolError`] if timestamp calculations overflow or storage insertion fails.
     pub fn issue_enrollment_token(
         &self,
         machine_id: MachineId,
@@ -129,10 +96,7 @@ impl AuthorityService {
             consumed: false,
         };
 
-        let mut tokens = self.tokens.lock().map_err(|_| {
-            ProtocolError::StorageUnavailable("authority tokens lock poisoned".to_string())
-        })?;
-        tokens.insert(record.token_id, record.clone());
+        self.authority_store.insert_token(&record)?;
 
         Ok(record)
     }
@@ -140,18 +104,18 @@ impl AuthorityService {
     /// Processes and verifies a machine enrollment transcript.
     ///
     /// # Normative Execution Sequence:
-    /// 1. Inspects token existence, expiration, and non-consumed status.
+    /// 1. Inspects token existence, expiration, and non-consumed status (pre-transaction check).
     /// 2. Asserts challenge nonce, machine identity, and generation match token.
     /// 3. Validates transcript timestamps (issued within skew, not expired, within token expiry).
     /// 4. Validates hardware counter and catalog baseline consistency ($\ge 1$).
     /// 5. Validates Endorsement Key SPKI DER structure and parameters.
     /// 6. Verifies HMAC-SHA256 signature under `secret`.
-    /// 7. Atomically transitions token state to `consumed = true`.
-    /// 8. Commits machine registration.
+    /// 7. Atomically transitions token state to `consumed = true` and commits machine registration
+    ///    under an immediate database transaction.
     ///
     /// # Errors
-    /// Returns [`ProtocolError`] if any validation or cryptographic check fails.
-    #[allow(clippy::significant_drop_tightening, clippy::too_many_lines)]
+    /// Returns [`ProtocolError`] if any validation, cryptographic check, or storage commit fails.
+    #[allow(clippy::too_many_lines)]
     pub fn process_enrollment(
         &self,
         transcript: &EnrollmentTranscript,
@@ -159,17 +123,16 @@ impl AuthorityService {
         secret: &SharedSecret,
         now: TimestampNs,
     ) -> Result<VerifiedEnrollment, ProtocolError> {
-        // 1. Inspect token state under lock
-        let mut tokens = self.tokens.lock().map_err(|_| {
-            ProtocolError::StorageUnavailable("authority tokens lock poisoned".to_string())
-        })?;
-
-        let token = tokens.get_mut(&transcript.token_id).ok_or_else(|| {
-            ProtocolError::CryptoError(format!(
-                "enrollment token '{}' not found in authority registry",
-                transcript.token_id
-            ))
-        })?;
+        // 1. Inspect token state (pre-transaction validation)
+        let token = self
+            .authority_store
+            .get_token(&transcript.token_id)?
+            .ok_or_else(|| {
+                ProtocolError::CryptoError(format!(
+                    "enrollment token '{}' not found in authority registry",
+                    transcript.token_id
+                ))
+            })?;
 
         if token.consumed {
             return Err(ProtocolError::CryptoError(format!(
@@ -261,10 +224,7 @@ impl AuthorityService {
         self.mac_verifier
             .verify_hmac_sha256(secret, &canonical_bytes, proof)?;
 
-        // 7. Atomic token consumption (mark consumed only after all checks pass)
-        token.consumed = true;
-
-        // 8. Commit machine registration
+        // 7. Atomic token consumption and machine registration in durable storage
         let registration = VerifiedEnrollment {
             machine_id: transcript.machine_id,
             token_id: transcript.token_id,
@@ -275,13 +235,12 @@ impl AuthorityService {
             counter_base: transcript.counter_base,
             catalog_base: transcript.catalog_base,
             key_metadata,
+            ek_pub_spki_der: transcript.ek_pub.clone(),
             enrolled_at: now,
         };
 
-        let mut registered = self.registered_machines.lock().map_err(|_| {
-            ProtocolError::StorageUnavailable("registered machines lock poisoned".to_string())
-        })?;
-        registered.insert(registration.machine_id, registration.clone());
+        self.authority_store
+            .commit_enrollment(&transcript.token_id, now, &registration)?;
 
         Ok(registration)
     }
@@ -289,15 +248,12 @@ impl AuthorityService {
     /// Queries whether `machine_id` is currently registered with the authority.
     ///
     /// # Errors
-    /// Returns [`ProtocolError`] if mutex is poisoned.
+    /// Returns [`ProtocolError`] if database query fails.
     pub fn get_registered_machine(
         &self,
         machine_id: &MachineId,
     ) -> Result<Option<VerifiedEnrollment>, ProtocolError> {
-        let registered = self.registered_machines.lock().map_err(|_| {
-            ProtocolError::StorageUnavailable("registered machines lock poisoned".to_string())
-        })?;
-        Ok(registered.get(machine_id).cloned())
+        self.authority_store.get_registered_machine(machine_id)
     }
 
     /// Processes an untrusted cryptographic outbox retrieval request.
