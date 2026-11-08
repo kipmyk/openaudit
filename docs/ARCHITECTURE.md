@@ -278,7 +278,34 @@ flowchart TD
    - `InsufficientPrivilege { required: PrivilegeLevel, current: PrivilegeLevel }`: Non-root context prevented rule evaluation.
    - `UnsupportedPlatform { family: PlatformFamily, distribution: PlatformDistribution, reason: String }`: Explicit, fail-closed platform rejection.
 
-### C. Fail-Closed Guarantees & Linux Engine Preservation
+### C. Linux Multi-Distribution Matrix & Validation Tiers
 
-- **Strict Fail-Closed Semantics:** On unsupported platforms (Windows, macOS, or unvalidated Linux distributions), OpenAudit rejects execution with typed `EngineError::UnsupportedPlatform` and records `CheckExecutionStatus::UnsupportedPlatform`. No synthetic or simulated audit data is ever returned.
-- **M2 Linux Engine Preservation:** The complete M2 Linux audit engine (20 built-in rules, privilege checks, `/proc`, `/sys`, and config collectors) operates identically through `LinuxPlatformBackend`, with 100% regression test coverage in the verified Ubuntu 24.04 LTS environment.
+Beginning in Milestone M3.2, OpenAudit expands its Linux reference backend from Ubuntu 24.04 LTS to officially support Debian 12 (Bookworm) and Debian 13 (Trixie).
+
+#### Validated Linux Platform Matrix
+
+| Distribution | Version | Target Name | Status | Validation Tiers |
+|---|---|---|---|---|
+| **Ubuntu** | 24.04 LTS | Noble Numbat | Supported | Container-tested (`openaudit-ci:ubuntu-24.04`), Mock-tested, Native Linux VM |
+| **Debian** | 12 | Bookworm | Supported | Container-tested (`openaudit-ci:debian-12`), Mock-tested |
+| **Debian** | 13 | Trixie | Supported | Container-tested (`openaudit-ci:debian-13`), Mock-tested |
+| **Debian** | < 12 | Legacy / EOL | Unsupported | Fails closed with typed rejection |
+| **Ubuntu** | != 24.04 | Non-Noble | Unsupported | Fails closed with typed rejection |
+| **RHEL / Alpine / Arch** | All | Other Linux | Unsupported | Fails closed with typed rejection |
+
+#### Validation Methodology & Verification Tiers
+OpenAudit strictly distinguishes between verification environments and never conflates container execution with native kernel qualification:
+1. **Container-Tested:** Executed inside real distribution OCI images (`debian:12-slim`, `debian:trixie-slim`, `ubuntu:24.04`) containing the distribution's libc, filesystem layout, service configuration files, and package tooling.
+2. **Native Distribution-Tested:** Executed on a dedicated machine or full virtual machine running the distribution's native kernel and systemd init.
+3. **Mock-Tested:** Deterministic in-memory filesystem (`FileSystem`) and process execution (`CommandRunner`) suites verifying edge cases, syntax variations, and permission boundaries.
+
+#### Binary Compatibility & glibc Boundaries
+- Ubuntu 24.04 links dynamically against glibc 2.39+.
+- Debian 12 ships with glibc 2.36, preventing dynamic execution of Ubuntu 24.04-built binaries on Debian 12 hosts without recompilation or static linking.
+- Debian 13 ships with glibc 2.41+, providing forward dynamic compatibility for Ubuntu 24.04 ELF binaries.
+- Each distribution's verification container compiles and verifies OpenAudit against its native glibc and userland tooling.
+
+### D. Fail-Closed Guarantees & Linux Engine Preservation
+
+- **Strict Fail-Closed Semantics:** On unsupported platforms (Windows M3.3, macOS M3.4, or unvalidated Linux distributions), OpenAudit rejects execution with typed `EngineError::UnsupportedPlatform` and records `CheckExecutionStatus::UnsupportedPlatform`. No synthetic or simulated audit data is ever returned.
+- **M2 Linux Engine Preservation:** The complete M2 Linux audit engine (20 built-in rules, privilege checks, `/proc`, `/sys`, and config collectors) operates identically through `LinuxPlatformBackend`, with 100% regression test coverage in the verified Ubuntu 24.04 LTS, Debian 12, and Debian 13 environments.
