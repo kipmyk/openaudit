@@ -987,11 +987,10 @@ mod tests {
                 println!("CHILD_ENROLLMENT_SUCCESS");
                 let _ = std::io::stdout().flush();
                 std::process::exit(0);
-            } else {
-                println!("CHILD_ENROLLMENT_REJECTED");
-                let _ = std::io::stdout().flush();
-                std::process::exit(42);
             }
+            println!("CHILD_ENROLLMENT_REJECTED");
+            let _ = std::io::stdout().flush();
+            std::process::exit(42);
         }
     }
 

@@ -267,7 +267,7 @@ fn test_cross_binary_full_attestation_and_retrieval_workflow() {
     assert!(prov_stdout.contains("BASELINE_COUNTER: 1"));
 
     let machine_id = extract_field(&prov_stdout, "MACHINE_ID:").expect("must output MACHINE_ID");
-    assert!(!machine_id.is_empty());
+    assert_ne!(machine_id, "");
 
     let secret_file_path = agent_state_dir.path().join("tpm-auth.secret");
     assert!(secret_file_path.is_file(), "tpm-auth.secret must exist");
@@ -397,7 +397,7 @@ fn test_cross_binary_full_attestation_and_retrieval_workflow() {
 
     let tx_id = extract_field(&process_enroll_stdout, "TRANSACTION_ID:")
         .expect("must output TRANSACTION_ID");
-    assert!(!tx_id.is_empty());
+    assert_ne!(tx_id, "");
 
     // -------------------------------------------------------------------------
     // STEP 7: Replay enrollment: Duplicate consumption of same token fails closed
