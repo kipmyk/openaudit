@@ -61,13 +61,8 @@ impl PlatformBackend for WindowsPlatformBackend {
     }
 
     fn is_supported(&self) -> bool {
-        matches!(
-            self.info.distribution,
-            PlatformDistribution::Windows10
-                | PlatformDistribution::Windows11
-                | PlatformDistribution::WindowsServer2022
-                | PlatformDistribution::WindowsServer2025
-        )
+        // Windows native audit collection scheduled for implementation in Milestone M3.3
+        false
     }
 
     fn collect_context(&self) -> Result<HostInspectionContext, EngineError> {
@@ -101,7 +96,8 @@ mod tests {
             backend.info().distribution,
             PlatformDistribution::WindowsServer2022
         );
-        assert!(backend.is_supported());
+        // Windows support is scheduled for Milestone M3.3
+        assert!(!backend.is_supported());
         assert!(backend.has_capability(PlatformCapability::WindowsRegistry));
         assert!(backend.has_capability(PlatformCapability::WindowsDefender));
         assert!(!backend.has_capability(PlatformCapability::KernelSysctl));

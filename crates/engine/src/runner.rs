@@ -438,4 +438,107 @@ mod tests {
             );
         }
     }
+
+    struct MockMissingCapBackend;
+    impl PlatformBackend for MockMissingCapBackend {
+        fn info(&self) -> &PlatformInfo {
+            static INFO: std::sync::OnceLock<PlatformInfo> = std::sync::OnceLock::new();
+            INFO.get_or_init(|| PlatformInfo {
+                family: PlatformFamily::Linux,
+                distribution: crate::platform::PlatformDistribution::Ubuntu,
+                version: crate::platform::PlatformVersion::parse("24.04"),
+                architecture: "x86_64".into(),
+                kernel_release: "6.8.0".into(),
+                hostname: "linux-minimal".into(),
+                pretty_name: "Ubuntu 24.04".into(),
+                machine_id: None,
+                // Intentionally omit KernelSysctl and SshDaemon
+                capabilities: vec![
+                    crate::platform::PlatformCapability::Firewall,
+                    crate::platform::PlatformCapability::FilePermissions,
+                ],
+            })
+        }
+
+        fn is_supported(&self) -> bool {
+            true
+        }
+
+        fn collect_context(&self) -> Result<crate::collector::HostInspectionContext, EngineError> {
+            Ok(crate::collector::HostInspectionContext {
+                os: None,
+                ssh: None,
+                users: None,
+                listening_ports: Vec::new(),
+                firewall: None,
+                file_permissions: Vec::new(),
+                udp_ports: Vec::new(),
+                suid_binaries: Vec::new(),
+                sysctl: None,
+                path_entries: Vec::new(),
+                current_privilege: PrivilegeLevel::Unprivileged,
+            })
+        }
+    }
+
+    #[test]
+    fn test_audit_engine_missing_capability_recorded() {
+        let org_id = OrganizationId::new();
+        let engine = AuditEngine::new(MockAuditFs, MockAuditRunner, default_linux_rules());
+        let backend = MockMissingCapBackend;
+
+        let report = engine
+            .run_audit_with_backend(org_id, &backend, AuditProfile::Baseline)
+            .expect("audit execution should succeed");
+
+        let missing_cap_count = report
+            .check_statuses
+            .iter()
+            .filter(|r| matches!(r.status, CheckExecutionStatus::MissingCapability { .. }))
+            .count();
+
+        assert!(
+            missing_cap_count > 0,
+            "Rules requiring omitted capabilities must be recorded as MissingCapability"
+        );
+    }
+
+    #[test]
+    fn test_audit_engine_profile_filtering() {
+        let org_id = OrganizationId::new();
+        let engine = AuditEngine::new(MockAuditFs, MockAuditRunner, default_linux_rules());
+        let report = engine
+            .run_audit_with_profile(org_id, AuditProfile::Baseline)
+            .expect("baseline audit");
+
+        // Any hardened rules in the rule set should be marked NotApplicable in Baseline profile
+        for record in &report.check_statuses {
+            if let CheckExecutionStatus::NotApplicable { ref reason } = record.status {
+                assert!(reason.contains("baseline audit profile"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_audit_report_serde_roundtrip() {
+        let org_id = OrganizationId::new();
+        let engine = AuditEngine::new(MockAuditFs, MockAuditRunner, default_linux_rules());
+        let report = engine
+            .run_local_audit(org_id)
+            .expect("audit execution should succeed");
+
+        let json = serde_json::to_string_pretty(&report).expect("serialize report");
+        assert!(json.contains("platform_info"));
+        assert!(json.contains("check_statuses"));
+
+        let deserialized: AuditReport =
+            serde_json::from_str(&json).expect("deserialize audit report");
+        assert_eq!(report.asset.id, deserialized.asset.id);
+        assert_eq!(report.findings.len(), deserialized.findings.len());
+        assert_eq!(
+            report.check_statuses.len(),
+            deserialized.check_statuses.len()
+        );
+        assert_eq!(report.platform_info, deserialized.platform_info);
+    }
 }

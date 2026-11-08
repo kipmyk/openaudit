@@ -64,11 +64,8 @@ impl PlatformBackend for MacosPlatformBackend {
     }
 
     fn is_supported(&self) -> bool {
-        matches!(
-            self.info.distribution,
-            PlatformDistribution::MacosSonoma | PlatformDistribution::MacosSequoia
-        ) || (self.info.family == PlatformFamily::MacOS
-            && (self.info.version.major == 14 || self.info.version.major == 15))
+        // macOS native audit collection scheduled for implementation in Milestone M3.4
+        false
     }
 
     fn collect_context(&self) -> Result<HostInspectionContext, EngineError> {
@@ -102,7 +99,8 @@ mod tests {
             backend.info().distribution,
             PlatformDistribution::MacosSonoma
         );
-        assert!(backend.is_supported());
+        // macOS support is scheduled for Milestone M3.4
+        assert!(!backend.is_supported());
         assert!(backend.has_capability(PlatformCapability::MacosGatekeeper));
         assert!(backend.has_capability(PlatformCapability::MacosSip));
         assert!(backend.has_capability(PlatformCapability::SshDaemon));

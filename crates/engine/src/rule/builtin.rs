@@ -2,8 +2,18 @@
 
 use crate::collector::firewall::FirewallStatus;
 use crate::collector::{HostInspectionContext, PrivilegeLevel};
+use crate::platform::PlatformCapability;
 use crate::rule::{Rule, RuleFinding};
 use openaudit_core::{EvidenceType, Severity};
+
+static SSH_CAPS: &[PlatformCapability] = &[PlatformCapability::SshDaemon];
+static FIREWALL_CAPS: &[PlatformCapability] = &[PlatformCapability::Firewall];
+static PORT_CAPS: &[PlatformCapability] = &[PlatformCapability::ListeningPorts];
+static FS_CAPS: &[PlatformCapability] = &[PlatformCapability::FilePermissions];
+static SUID_CAPS: &[PlatformCapability] = &[PlatformCapability::SuidSgidBinaries];
+static USER_CAPS: &[PlatformCapability] = &[PlatformCapability::SystemUsers];
+static KERNEL_CAPS: &[PlatformCapability] = &[PlatformCapability::KernelSysctl];
+static ENV_CAPS: &[PlatformCapability] = &[PlatformCapability::EnvironmentVariables];
 
 /// Rule flagging direct root login via SSH (`PermitRootLogin yes`).
 #[derive(Debug, Default, Clone, Copy)]
@@ -32,6 +42,10 @@ impl Rule for SshPermitRootLoginRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        SSH_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -86,6 +100,10 @@ impl Rule for SshPasswordAuthRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        SSH_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -148,6 +166,10 @@ impl Rule for DuplicateRootUidRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        USER_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let Some(users) = context.users.as_ref() else {
             return Vec::new();
@@ -204,6 +226,10 @@ impl Rule for ExposedDatabasePortRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        PORT_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -308,6 +334,10 @@ impl Rule for FirewallInactiveRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        FIREWALL_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let Some(fw) = context.firewall.as_ref() else {
             return Vec::new();
@@ -357,6 +387,10 @@ impl Rule for SensitiveFilePermissionsRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        FS_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -425,6 +459,10 @@ impl Rule for EmptyPasswordRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::RootRequired
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        USER_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -568,6 +606,10 @@ impl Rule for SshX11ForwardingRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        SSH_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let Some(ssh) = context.ssh.as_ref() else {
             return Vec::new();
@@ -617,6 +659,10 @@ impl Rule for SshMaxAuthTriesRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        SSH_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -678,6 +724,10 @@ impl Rule for ServiceAccountInteractiveShellRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        USER_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let Some(users) = context.users.as_ref() else {
             return Vec::new();
@@ -731,6 +781,10 @@ impl Rule for SudoersNopasswdRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        USER_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let Some(users) = context.users.as_ref() else {
             return Vec::new();
@@ -782,6 +836,10 @@ impl Rule for SudoGroupMemberRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        USER_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -838,6 +896,10 @@ impl Rule for SshWildcardExposureRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        PORT_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let mut findings = Vec::new();
         for port_info in &context.listening_ports {
@@ -888,6 +950,10 @@ impl Rule for DnsPubliclyExposedRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        PORT_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -942,6 +1008,10 @@ impl Rule for UnexpectedSuidBinaryRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        SUID_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let mut findings = Vec::new();
         for binary in &context.suid_binaries {
@@ -992,6 +1062,10 @@ impl Rule for UnexpectedSgidBinaryRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        SUID_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -1046,6 +1120,10 @@ impl Rule for WritablePathEntryRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        ENV_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let mut findings = Vec::new();
         for entry in &context.path_entries {
@@ -1096,6 +1174,10 @@ impl Rule for KernelDmesgUnrestrictedRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        KERNEL_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
@@ -1149,6 +1231,10 @@ impl Rule for KernelIpForwardingRule {
         PrivilegeLevel::Unprivileged
     }
 
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        KERNEL_CAPS
+    }
+
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {
         let Some(sysctl) = context.sysctl.as_ref() else {
             return Vec::new();
@@ -1198,6 +1284,10 @@ impl Rule for KernelAslrDisabledRule {
 
     fn required_privilege(&self) -> PrivilegeLevel {
         PrivilegeLevel::Unprivileged
+    }
+
+    fn required_capabilities(&self) -> &[PlatformCapability] {
+        KERNEL_CAPS
     }
 
     fn evaluate(&self, context: &HostInspectionContext) -> Vec<RuleFinding> {

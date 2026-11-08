@@ -49,7 +49,7 @@ impl<FS: FileSystem + Clone, CR: CommandRunner + Clone> LinuxPlatformBackend<FS,
             hostname: "localhost".to_string(),
             pretty_name: "Generic Linux Host".to_string(),
             machine_id: None,
-            capabilities: Self::default_capabilities(),
+            capabilities: LinuxPlatformBackend::default_capabilities(),
         };
 
         Self { info, fs, runner }
@@ -61,6 +61,21 @@ impl LinuxPlatformBackend<RealFileSystem, RealCommandRunner> {
     #[must_use]
     pub fn generic_fallback() -> Self {
         Self::fallback(RealFileSystem, RealCommandRunner)
+    }
+
+    /// Returns the standard Linux capabilities.
+    #[must_use]
+    pub fn default_capabilities() -> Vec<PlatformCapability> {
+        vec![
+            PlatformCapability::KernelSysctl,
+            PlatformCapability::SshDaemon,
+            PlatformCapability::Firewall,
+            PlatformCapability::ListeningPorts,
+            PlatformCapability::SuidSgidBinaries,
+            PlatformCapability::FilePermissions,
+            PlatformCapability::SystemUsers,
+            PlatformCapability::EnvironmentVariables,
+        ]
     }
 }
 
@@ -173,7 +188,7 @@ impl<FS: FileSystem + Clone, CR: CommandRunner + Clone> LinuxPlatformBackend<FS,
             hostname,
             pretty_name,
             machine_id,
-            capabilities: Self::default_capabilities(),
+            capabilities: LinuxPlatformBackend::default_capabilities(),
         };
 
         Ok(Self {
@@ -188,21 +203,6 @@ impl<FS: FileSystem + Clone, CR: CommandRunner + Clone> LinuxPlatformBackend<FS,
     pub const fn with_info(info: PlatformInfo, fs: FS, runner: CR) -> Self {
         Self { info, fs, runner }
     }
-
-    /// Returns the standard Linux capabilities.
-    #[must_use]
-    pub fn default_capabilities() -> Vec<PlatformCapability> {
-        vec![
-            PlatformCapability::KernelSysctl,
-            PlatformCapability::SshDaemon,
-            PlatformCapability::Firewall,
-            PlatformCapability::ListeningPorts,
-            PlatformCapability::SuidSgidBinaries,
-            PlatformCapability::FilePermissions,
-            PlatformCapability::SystemUsers,
-            PlatformCapability::EnvironmentVariables,
-        ]
-    }
 }
 
 impl<FS: FileSystem + Send + Sync, CR: CommandRunner + Send + Sync> PlatformBackend
@@ -215,13 +215,10 @@ impl<FS: FileSystem + Send + Sync, CR: CommandRunner + Send + Sync> PlatformBack
     fn is_supported(&self) -> bool {
         match self.info.distribution {
             PlatformDistribution::Ubuntu => {
-                // Ubuntu 24.04 LTS is officially supported
+                // Ubuntu 24.04 LTS is officially supported and verified in CI container
                 self.info.version.major == 24
             }
-            PlatformDistribution::Debian => {
-                // Debian 12 (Bookworm) and Debian 13 (Trixie) are supported
-                self.info.version.major == 12 || self.info.version.major == 13
-            }
+            // Debian 12/13 validation is scheduled for Milestone M3.2
             _ => false,
         }
     }
@@ -342,7 +339,8 @@ mod tests {
         let backend12 = LinuxPlatformBackend::detect(&fs_deb12, &MockRunner).expect("detect");
         assert_eq!(backend12.info().distribution, PlatformDistribution::Debian);
         assert_eq!(backend12.info().version.major, 12);
-        assert!(backend12.is_supported());
+        // Debian support is scheduled for Milestone M3.2 following dedicated validation
+        assert!(!backend12.is_supported());
 
         let fs_deb13 = MockFs {
             os_release: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nVERSION_CODENAME=trixie\n".into(),
@@ -353,7 +351,8 @@ mod tests {
         let backend13 = LinuxPlatformBackend::detect(&fs_deb13, &MockRunner).expect("detect");
         assert_eq!(backend13.info().distribution, PlatformDistribution::Debian);
         assert_eq!(backend13.info().version.major, 13);
-        assert!(backend13.is_supported());
+        // Debian support is scheduled for Milestone M3.2 following dedicated validation
+        assert!(!backend13.is_supported());
     }
 
     #[test]

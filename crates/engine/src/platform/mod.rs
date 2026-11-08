@@ -443,5 +443,124 @@ mod tests {
         };
         let json_missing = serde_json::to_string(&status_missing).expect("serialize");
         assert!(json_missing.contains("missing_capability"));
+
+        let status_inaccessible = CheckExecutionStatus::Inaccessible {
+            resource: "/etc/shadow".into(),
+            reason: "Permission denied".into(),
+        };
+        let json_inacc = serde_json::to_string(&status_inaccessible).expect("serialize");
+        assert!(json_inacc.contains("inaccessible"));
+    }
+
+    #[derive(Clone)]
+    struct MockPlatformFs {
+        os_release: Option<String>,
+    }
+
+    impl FileSystem for MockPlatformFs {
+        fn read_to_string(&self, path: &str) -> Result<String, EngineError> {
+            if path == "/etc/os-release" || path == "/usr/lib/os-release" {
+                if let Some(ref content) = self.os_release {
+                    return Ok(content.clone());
+                }
+            }
+            Err(EngineError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            )))
+        }
+
+        fn exists(&self, path: &str) -> bool {
+            (path == "/etc/os-release" || path == "/usr/lib/os-release")
+                && self.os_release.is_some()
+        }
+
+        fn file_mode(&self, _path: &str) -> Result<u32, EngineError> {
+            Ok(0o644)
+        }
+
+        fn read_dir(&self, _path: &str) -> Result<Vec<String>, EngineError> {
+            Ok(Vec::new())
+        }
+
+        fn read_link(&self, _path: &str) -> Result<String, EngineError> {
+            Err(EngineError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "not found",
+            )))
+        }
+    }
+
+    #[derive(Clone)]
+    struct MockPlatformRunner;
+    impl crate::collector::CommandRunner for MockPlatformRunner {
+        fn run(&self, _program: &str, _args: &[&str]) -> Result<String, EngineError> {
+            Ok(String::new())
+        }
+    }
+
+    #[test]
+    fn test_detect_current_platform_selects_linux_when_os_release_present() {
+        let fs = MockPlatformFs {
+            os_release: Some(
+                "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04\"\n".into(),
+            ),
+        };
+        let runner = MockPlatformRunner;
+        let backend = detect_current_platform(&fs, &runner);
+
+        assert_eq!(backend.info().family, PlatformFamily::Linux);
+        assert_eq!(backend.info().distribution, PlatformDistribution::Ubuntu);
+        assert!(backend.is_supported());
+    }
+
+    #[test]
+    fn test_platform_capability_matrix_coverage() {
+        let caps = [
+            PlatformCapability::KernelSysctl,
+            PlatformCapability::SshDaemon,
+            PlatformCapability::Firewall,
+            PlatformCapability::ListeningPorts,
+            PlatformCapability::SuidSgidBinaries,
+            PlatformCapability::FilePermissions,
+            PlatformCapability::SystemUsers,
+            PlatformCapability::EnvironmentVariables,
+            PlatformCapability::WindowsRegistry,
+            PlatformCapability::WindowsDefender,
+            PlatformCapability::MacosGatekeeper,
+            PlatformCapability::MacosSip,
+        ];
+
+        for cap in caps {
+            let display = cap.to_string();
+            assert_ne!(display, "");
+            let json = serde_json::to_string(&cap).expect("serialize");
+            let deserialized: PlatformCapability =
+                serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(cap, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_platform_info_serialization_roundtrip() {
+        let info = PlatformInfo {
+            family: PlatformFamily::Linux,
+            distribution: PlatformDistribution::Ubuntu,
+            version: PlatformVersion::parse("24.04.1").with_codename("noble"),
+            architecture: "x86_64".into(),
+            kernel_release: "6.8.0-45-generic".into(),
+            hostname: "audit-host.internal".into(),
+            pretty_name: "Ubuntu 24.04 LTS".into(),
+            machine_id: Some("fedcba0987654321".into()),
+            capabilities: LinuxPlatformBackend::default_capabilities(),
+        };
+
+        let json = serde_json::to_string_pretty(&info).expect("serialize");
+        assert!(json.contains("audit-host.internal"));
+        assert!(json.contains("fedcba0987654321"));
+        assert!(json.contains("kernel_sysctl"));
+
+        let deserialized: PlatformInfo = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(info, deserialized);
     }
 }
