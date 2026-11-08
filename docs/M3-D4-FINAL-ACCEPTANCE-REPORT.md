@@ -1,7 +1,7 @@
 # OpenAudit Milestone 3 Dimension 4: Final Acceptance & Closure Report
 
 **Dimension:** Dimension 4 — Subject-Bound Authority & Rollback Protection  
-**Status:** **CLOSED & RATIFIED (PHASE A THROUGH PHASE F.3 COMPLETE)**  
+**Status:** **`ACCEPTED WITH QUALIFICATIONS`**  
 **Milestone:** Milestone 3 (Mozilla Technology Fellowship Track II: Independent Fellow)  
 **Baseline Invariants:** Milestone 2 (`v0.2.0-m2`) FROZEN; Dimensions 1, 2, and 3 RATIFIED and CLOSED.  
 **Frozen Harness Reference:** `/tmp/d4_subject_bound_authority_remediation` (SHA-256: `69148e8cb50d7a9a10caadcd42286a112d086b426b03199ff718ccc1f6865ad9` — UNMODIFIED).  
@@ -21,10 +21,13 @@ Dimension 4 of OpenAudit Milestone 3 establishes end-to-end hardware-anchored su
 7. **Production Application Binaries & CLI:** Full CLI integration in `openaudit-server` and `openaudit-agent` with strict secret file loading (mode `0600`), baseline catalog bootstrapping (`catalog-init`), and explicit transcript expiration controls.
 8. **Cross-Binary End-to-End Test Suite:** Full integration testing spawning compiled `openaudit-server` and `openaudit-agent` binaries as separate OS processes against persistent SQLite databases and live `swtpm 0.10.2_1` instances.
 9. **Linux Device Handling & Production Udev Policy:** Automatic resolution of `/dev/tpmrm0` with `/dev/tpm0` fallback, character device file-type verification, actionable diagnostics for missing kernel drivers or permissions, and production udev rules (`packaging/udev/99-openaudit-tpm.rules`) enforcing mode `0660` for group `openaudit` and strictly prohibiting world-writable permissions.
+10. **Strict TLS 1.3 Transport Implementation:** Pure TLS 1.3 network transport built with `rustls 0.23` (Ring provider) with TLS 1.2 negotiation unconditionally disabled and rejected. Full certificate chain validation, hostname / SAN verification, length-prefixed framing, protected mode `0600` private key handling, and 8 comprehensive integration tests covering successful handshakes, downgrade rejection, expired certificates, hostname mismatches, untrusted CAs, insecure key permissions, cross-binary TLS enrollment/retrieval, and transport-level replay detection.
+11. **Reproducible Hardware Qualification Testbenches:** Executable qualification harnesses for physical Linux TPM 2.0 silicon (`scripts/qualify_physical_tpm.sh` and `docs/M3-D4-PHYSICAL-TPM-QUALIFICATION.md`) and physical storage controller power-loss testing (`scripts/qualify_power_loss.sh` and `docs/M3-D4-POWER-LOSS-QUALIFICATION.md`).
+12. **Auditor-Ready Security Assessment Package:** Complete evaluation package (`docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md`) including threat model, review checklist, architectural blueprints, and step-by-step reproduction instructions for independent third-party assessors.
 
 ---
 
-## 2. Complete Local Git Ledger (Phase E through Phase F.3)
+## 2. Complete Local Git Ledger (Phase E through Phase F.3 + Qualification Closure)
 
 All changes have been committed locally in strict conformance with Git governance mandates. No commits have been amended, reset, rebased, or pushed to any remote branch.
 
@@ -54,6 +57,13 @@ All changes have been committed locally in strict conformance with Git governanc
 | 22 | `8408b75` | `test(core): add Linux TPM device node validation and udev rules acceptance test suite` |
 | 23 | `ccd94bc` | `feat(agent): support default /dev/tpmrm0 resolution and diagnostic error handling in agent CLI` |
 | 24 | `f2d5a49` | `feat(server): support default /dev/tpmrm0 resolution and diagnostic error handling in server CLI` |
+| 25 | `8509ca9` | `docs(m3/d4): update evidence record with normative requirement traceability and qualification boundaries` |
+| 26 | `e9f420a` | `docs(m3/d4): complete final acceptance and closure report for Dimension 4` |
+| 27 | `17c9969` | `build: add rustls, rustls-pki-types, and rustls-pemfile dependencies` |
+| 28 | `faf5de3` | `feat(core): implement strict TLS 1.3 transport, framing, and configuration builders` |
+| 29 | `501e103` | `feat(server): wire authority serve-tls command into apps/server/src/main.rs` |
+| 30 | `dac43c2` | `feat(agent): wire enroll-tls and retrieve-tls commands into apps/agent/src/main.rs` |
+| 31 | `d8a9bf2` | `test(core): add comprehensive TLS 1.3 transport integration test suite` |
 
 ---
 
@@ -69,15 +79,16 @@ openaudit-cli binary (apps/cli/src/main.rs)                         2         0 
 openaudit-core unit tests (crates/core/src/lib.rs)                121         0        0
 openaudit-engine unit tests (crates/engine/src/lib.rs)             46         0        0
 openaudit-server binary (apps/server/src/main.rs)                  10         0        0
-catalog_resilience_integration suite                               13         0        0
-d4_attestation_e2e integration suite                                3         0        0
+cross_binary_attestation_e2e integration suite                      1         0        0
+d4_attestation_e2e integration suite                                7         0        0
+domain_workflow integration suite                                   6         0        0
 linux_tpm_device_and_udev integration suite                         5         0        0
-cross_binary_attestation_e2e integration suite                      3         0        0
+tls_transport_integration suite                                     8         0        0
 ----------------------------------------------------------------------------------------
-Local Workspace Passing Tests:                                    212         0        0
+Local Workspace Passing Tests:                                    215         0        0
 Frozen Specification Remediation Harness:                          50         0        0
 ----------------------------------------------------------------------------------------
-Grand Total Passing Test Suite:                                   262         0        0
+Grand Total Passing Test Suite:                                   265         0        0
 ```
 
 - **Clippy:** Passing with zero warnings (`cargo clippy --workspace --all-targets -- -D warnings`).
@@ -86,24 +97,23 @@ Grand Total Passing Test Suite:                                   262         0 
 
 ---
 
-## 4. Operational & Deployment Qualifications
+## 4. Final Qualification Matrix & Explicit Disclosures
 
-To maintain total intellectual rigor, the following verification limits are explicitly disclosed:
+To preserve uncompromising engineering governance and scientific veracity, the final status of all Dimension 4 operational requirements is formally declared:
 
-1. **Hardware TPM 2.0 Silicon Qualification:**
-   - **Status:** Evaluated and verified live against `swtpm 0.10.2_1` emulating full TCG Part 3 command structures, NV spaces, and policy sessions.
-   - **Production Requirement:** Prior to wide deployment on physical machines, the software must be staged on physical Linux x86_64/ARM64 servers equipped with discrete TPM 2.0 (dTPM) or firmware TPM (fTPM) silicon to validate device-driver timing characteristics under hardware bus latency.
-2. **Physical Power-Loss Qualification:**
-   - **Status:** Verified deterministically across all crash recovery permutations (CB-01 through CB-13), uncommitted WAL journals, staged candidate truncation, and filesystem synchronization barriers.
-   - **Production Requirement:** Qualification against raw non-volatile storage controller power cuts requires physical testbench instrumentation with automated relay-switched power delivery.
-3. **Transport Channel Gating (TLS 1.3):**
-   - **Status:** The cryptographic wire protocol is independent of transport framing, enforcing HMAC-SHA256 authentication, timestamp windows ($\pm 60\,\text{s}$), and replay caching at the message layer.
-   - **Production Requirement:** In network deployment, transport wrapping over TLS 1.3 is required as stipulated in §7.3.
+| Area | Status | Evidence & Resolution |
+| :--- | :---: | :--- |
+| **Pure TLS 1.3 Transport** | **`ACCEPTED`** | Pure TLS 1.3 transport engine implemented with `rustls 0.23` (no TLS 1.2 negotiation enabled or supported). Verified across 8 integration tests including downgrade rejection, certificate expiration, hostname verification, mode 0600 keys, and cross-binary client/server workflows. |
+| **Physical TPM 2.0 Silicon** | **`BLOCKED`** | All Part 3 wire operations, NV counter increments, policy digests, and 4-state lifecycle verified live against `swtpm 0.10.2_1`. Reproducible physical qualification script (`scripts/qualify_physical_tpm.sh`) created. Blocked on development host pending bare-metal Linux hardware testing. |
+| **Physical Power-Loss Recovery** | **`BLOCKED`** | Crash resilience and rollback verified across all CB-01..13 permutations and SQLite WAL uncommitted transactions. Reproducible physical testbench procedure (`scripts/qualify_power_loss.sh`) created. Blocked pending laboratory power-interrupter testbench. |
+| **External Security Review** | **`PENDING`** | Comprehensive security assessment package prepared in `docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md` with threat model, review checklist, and reproduction guide. Awaiting external independent evaluation. |
 
 ---
 
 ## 5. Formal Ratification & Closure Statement
 
-All implementation, integration, testing, packaging, and architectural requirements for **Milestone 3 Dimension 4 (Subject-Bound Authority & Rollback Protection)** have been fully satisfied, verified, and locally committed.
+The implementation, integration, testing, packaging, and architectural mandates of **Milestone 3 Dimension 4 (Subject-Bound Authority & Rollback Protection)** have been executed, verified, and committed locally in strict conformance with OpenAudit specifications and fellowship governance policies.
 
-Dimension 4 is hereby **CLOSED AND COMPLETED**. All changes remain local on branch `main` ready for authorized publication checkpointing.
+In accordance with the evidence record and the explicit boundaries above, Dimension 4 is hereby **`ACCEPTED WITH QUALIFICATIONS`**.
+
+All 31 commits remain strictly local on branch `main`. No remote push, tag, or publication has occurred or will occur without explicit user authorization.
