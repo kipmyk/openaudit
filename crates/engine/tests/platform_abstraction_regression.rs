@@ -9,8 +9,8 @@ use openaudit_engine::collector::{CommandRunner, FileSystem, PrivilegeLevel};
 use openaudit_engine::error::EngineError;
 use openaudit_engine::platform::{
     detect_current_platform, CheckExecutionStatus, LinuxPlatformBackend, MacosPlatformBackend,
-    PlatformBackend, PlatformCapability, PlatformDistribution, PlatformFamily,
-    WindowsPlatformBackend,
+    PlatformBackend, PlatformCapability, PlatformDistribution, PlatformFamily, PlatformInfo,
+    PlatformVersion, WindowsPlatformBackend,
 };
 use openaudit_engine::profile::AuditProfile;
 use openaudit_engine::rule::builtin::default_linux_rules;
@@ -220,7 +220,19 @@ fn test_unsupported_platform_backends_fail_closed_without_simulation() {
         "Windows backend must fail closed with explicit milestone scheduling error: {win_err:?}"
     );
 
-    let mac_backend = MacosPlatformBackend::detect();
+    // Unsupported legacy macOS version must fail closed
+    let unsupported_mac_info = PlatformInfo {
+        family: PlatformFamily::MacOS,
+        distribution: PlatformDistribution::OtherMacos("macOS 12 Monterey".into()),
+        version: PlatformVersion::parse("12.7.4"),
+        architecture: "x86_64".into(),
+        kernel_release: "Darwin 21.6.0".into(),
+        hostname: "old-mac".into(),
+        pretty_name: "macOS Monterey".into(),
+        machine_id: None,
+        capabilities: MacosPlatformBackend::default_capabilities(),
+    };
+    let mac_backend = MacosPlatformBackend::with_info(unsupported_mac_info);
     assert_eq!(mac_backend.info().family, PlatformFamily::MacOS);
     assert!(!mac_backend.is_supported());
 
