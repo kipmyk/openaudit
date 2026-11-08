@@ -1,9 +1,11 @@
 //! Rule evaluation engine and security rule traits.
 
 pub mod builtin;
+pub mod macos;
 pub mod windows;
 
 pub use builtin::default_linux_rules;
+pub use macos::default_macos_rules;
 pub use windows::default_windows_rules;
 
 /// Returns all built-in rules across supported platforms.
@@ -11,6 +13,7 @@ pub use windows::default_windows_rules;
 pub fn all_builtin_rules() -> Vec<Box<dyn Rule>> {
     let mut rules = default_linux_rules();
     rules.extend(default_windows_rules());
+    rules.extend(default_macos_rules());
     rules
 }
 
@@ -19,9 +22,8 @@ pub fn all_builtin_rules() -> Vec<Box<dyn Rule>> {
 pub fn default_rules_for_platform(family: PlatformFamily) -> Vec<Box<dyn Rule>> {
     match family {
         PlatformFamily::Windows => default_windows_rules(),
-        PlatformFamily::Linux | PlatformFamily::MacOS | PlatformFamily::Unknown => {
-            default_linux_rules()
-        }
+        PlatformFamily::MacOS => default_macos_rules(),
+        PlatformFamily::Linux | PlatformFamily::Unknown => default_linux_rules(),
     }
 }
 
