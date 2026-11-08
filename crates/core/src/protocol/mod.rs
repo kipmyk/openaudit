@@ -6,6 +6,7 @@
 
 pub mod agent;
 pub mod authority;
+pub mod authority_store;
 pub mod canonical;
 pub mod catalog;
 pub mod crypto;
@@ -17,7 +18,9 @@ pub mod trust;
 pub mod types;
 
 pub use agent::{AgentAttestationClient, AgentCredentials};
-pub use authority::{AuthorityService, IssuedTokenRecord, VerifiedEnrollment};
+pub use authority::AuthorityService;
+pub use authority_store::SqliteAuthorityStore;
+pub use traits::{AuthorityStore, IssuedTokenRecord, VerifiedEnrollment};
 
 pub use canonical::{
     canonicalize, canonicalize_value, validate_safe_integers, MAX_SAFE_INTEGER, MIN_SAFE_INTEGER,
