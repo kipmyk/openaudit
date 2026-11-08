@@ -228,3 +228,57 @@ flowchart TD
 - **Caddy:** Serves as the edge TLS terminator with automated Let's Encrypt certificate management and HTTP/2 support.
 - **openaudit-server:** Stateless application binary handling API routes and embedded job processing.
 - **PostgreSQL:** Stores asset metadata, scan schedules, findings, audit trails, and the job queue.
+
+---
+
+## 8. Platform Abstraction & Capability Model
+
+Beginning in Milestone M3, OpenAudit establishes a typed platform abstraction layer enabling a single unified Rust audit engine (`openaudit-engine`) to support cross-platform inspection while maintaining strict fail-closed safety.
+
+### A. Architectural Boundaries
+
+```mermaid
+flowchart TD
+    CLI[openaudit-cli / agent] --> Engine[Audit Engine Runner]
+    Engine --> PlatformDetect[Platform Detection]
+    PlatformDetect --> Backend[PlatformBackend Trait]
+    Backend -->|Ubuntu 24.04 Validated| LinuxBackend[LinuxPlatformBackend]
+    Backend -->|M3.3 Scheduled| WinBackend[WindowsPlatformBackend]
+    Backend -->|M3.4 Scheduled| MacBackend[MacosPlatformBackend]
+    
+    Engine --> Rules[Rule Registry]
+    Rules --> CapCheck{Capability & Privilege Check}
+    CapCheck -->|Supported & Authorized| Exec[Execute Rule Check]
+    CapCheck -->|Missing Capability| SkipCap[CheckExecutionStatus::MissingCapability]
+    CapCheck -->|Insufficient Privilege| SkipPriv[CheckExecutionStatus::InsufficientPrivilege]
+    CapCheck -->|Unsupported OS| FailClosed[CheckExecutionStatus::UnsupportedPlatform]
+```
+
+### B. Core Abstraction Types
+
+1. **`PlatformBackend` Trait:**
+   Defines the contract for platform detection, capability queries, and host inspection collection:
+   - `platform_info(&self) -> &PlatformInfo`: Access platform family, distribution, and version.
+   - `capabilities(&self) -> &[PlatformCapability]`: Query supported host inspection primitives.
+   - `has_capability(&self, cap: PlatformCapability) -> bool`: Constant-time capability check.
+   - `is_supported(&self) -> bool`: Explicit platform support gate.
+   - `collect_context(&self) -> Result<HostInspectionContext, EngineError>`: Gather typed inspection state.
+
+2. **`PlatformCapability` Enumeration:**
+   Granular capabilities decoupling rules from platform-specific APIs:
+   - Linux: `KernelSysctl`, `Firewall`, `ListeningPorts`, `FilePermissions`, `SystemUsers`, `SuidSgidBinaries`, `SshDaemon`, `EnvironmentVariables`.
+   - Windows (M3.3): `WindowsRegistry`, `WindowsDefender`.
+   - macOS (M3.4): `MacosGatekeeper`, `MacosSip`.
+
+3. **`CheckExecutionStatus` Lifecycle:**
+   Every check registered in an audit run is tracked deterministically in the final `AuditReport`:
+   - `Executed { passed: bool }`: Check executed cleanly; findings recorded if `passed == false`.
+   - `SkippedDisabled`: Check disabled by operator profile.
+   - `MissingCapability { capability: PlatformCapability }`: Platform lacks the required OS capability.
+   - `InsufficientPrivilege { required: PrivilegeLevel, current: PrivilegeLevel }`: Non-root context prevented rule evaluation.
+   - `UnsupportedPlatform { family: PlatformFamily, distribution: PlatformDistribution, reason: String }`: Explicit, fail-closed platform rejection.
+
+### C. Fail-Closed Guarantees & Linux Engine Preservation
+
+- **Strict Fail-Closed Semantics:** On unsupported platforms (Windows, macOS, or unvalidated Linux distributions), OpenAudit rejects execution with typed `EngineError::UnsupportedPlatform` and records `CheckExecutionStatus::UnsupportedPlatform`. No synthetic or simulated audit data is ever returned.
+- **M2 Linux Engine Preservation:** The complete M2 Linux audit engine (20 built-in rules, privilege checks, `/proc`, `/sys`, and config collectors) operates identically through `LinuxPlatformBackend`, with 100% regression test coverage in the verified Ubuntu 24.04 LTS environment.
