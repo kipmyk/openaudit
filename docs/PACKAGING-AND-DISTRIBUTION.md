@@ -29,7 +29,7 @@ OpenAudit achieves standalone runtime execution by minimizing dynamic dependenci
 | :--- | :--- | :--- | :--- | :--- |
 | **Linux (Debian/Ubuntu)** | Native `.deb` Package | `amd64`, `arm64` | `libc.so.6` (glibc $\ge 2.34$), `libm.so.6`, `libgcc_s.so.1` | SQLite (bundled C amalgamation), Ring/Rustls (pure Rust crypto), all rule definitions |
 | **Linux (Universal)** | Portable `.tar.gz` | `x86_64`, `aarch64` | `libc.so.6` (glibc $\ge 2.34$), `libm.so.6`, `libgcc_s.so.1` | Self-contained binaries (`openaudit`, `openaudit-agent`, `openaudit-server`), systemd units, udev rules |
-| **macOS** | Portable `.tar.gz` / Bundle | `aarch64` (Apple Silicon), `x86_64` (Intel) | `/usr/lib/libSystem.B.dylib`, `CoreFoundation.framework`, `libiconv.2.dylib` | Mach-O standalone binary, embedded rules, launchd daemon plist |
+| **macOS** | Portable `.tar.gz` / Bundle | `aarch64` (Apple Silicon; Intel x86_64 unverified) | `/usr/lib/libSystem.B.dylib`, `CoreFoundation.framework`, `libiconv.2.dylib` | Mach-O standalone binary, embedded rules, launchd daemon plist |
 | **Windows** | Portable `.zip` / Service Installer | `x86_64` (PE64) | `KERNEL32.dll`, `ADVAPI32.dll`, `WS2_32.dll`, `NTDLL.dll` | Standalone `.exe` binaries, embedded rules, PowerShell service installer scripts |
 
 ---
@@ -40,8 +40,9 @@ We reject misleading claims of "zero dependencies." Running software on any oper
 
 ### A. Linux Unavoidable Prerequisites
 1. **Kernel Version:** Linux kernel $\ge 5.15$ with `/proc` and `/sys` virtual filesystems mounted.
-2. **C Runtime Library:** `glibc` $\ge 2.34$ (Debian 12 Bookworm provides glibc 2.36; Ubuntu 22.04 provides glibc 2.35; Ubuntu 24.04 provides glibc 2.39).
-   - *Cross-Distro Compatibility Guarantee:* Binaries are compiled against a Debian 12 baseline (glibc 2.36), guaranteeing that the same package executes across Debian 12, Debian 13, and Ubuntu 24.04 without symbol incompatibility errors.
+2. **C Runtime Library:** `glibc` with symbols up to `GLIBC_2.34` (verified via `objdump -p` on Debian 12 release binaries).
+   - *Validated Distribution Matrix:* Debian 12 (Bookworm, glibc 2.36), Debian 13 (Trixie, glibc 2.40+), and Ubuntu 24.04 (Noble, glibc 2.39).
+   - *Compatibility Boundary:* Ubuntu 22.04 (Jammy, glibc 2.35) remains unvalidated and is not included in the supported distribution matrix until explicitly tested against clean environments.
 3. **Execution Privileges:**
    - Standalone CLI unprivileged scan: Inspects user-accessible configurations, sysctl, environment, open sockets.
    - Privileged scan: Requires `root` or `sudo` to inspect `/etc/shadow`, `/etc/sudoers`, `/boot`, raw firewall rules (`iptables`/`nftables`), and privileged system accounts.
@@ -51,8 +52,8 @@ We reject misleading claims of "zero dependencies." Running software on any oper
 ### B. macOS Unavoidable Prerequisites
 1. **Operating System Version:** macOS 14.0 (Sonoma), macOS 15.0 (Sequoia), or newer. Legacy macOS ($< 14.0$) fails closed to prevent incorrect posture assumptions.
 2. **System Libraries:** Standard macOS `libSystem.B.dylib` and `CoreFoundation.framework` (pre-installed on all macOS devices).
-3. **Execution Privileges & Permissions:**
-   - System Integrity Protection (SIP) enabled.
+3. **Security Posture Independence (SIP):** System Integrity Protection (SIP) is an *audited posture check* (`macos.sip.disabled`), NOT a runtime prerequisite. OpenAudit executes cleanly whether SIP is enabled or disabled.
+4. **Execution Privileges & Permissions:**
    - Terminal / binary Full Disk Access (FDA) in *System Settings $\rightarrow$ Privacy & Security* if auditing restricted user directories.
    - Root / Administrator (`sudo`) required for assessing FileVault status (`fdesetup`), directory services (`dscl`), and system launch daemons.
 
@@ -180,3 +181,4 @@ Reproducible releases are built automatically via `.github/workflows/release.yml
 1. **Linux Build (`package-linux`):** Uses the `openaudit-ci:debian-12` container to guarantee glibc 2.36 compatibility across all modern Linux distributions. Runs `./scripts/test-clean-install.sh` on pristine Ubuntu and Debian before artifact publication.
 2. **macOS Build (`package-macos`):** Executes on `macos-14`, builds standalone Mach-O binaries, packages `.tar.gz`, and verifies execution and report generation.
 3. **Windows Build (`package-windows`):** Executes on `windows-latest`, compiles standalone PE64 executables, bundles PowerShell service scripts, and compresses into `.zip` distribution.
+

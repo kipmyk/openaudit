@@ -1,9 +1,6 @@
 name: Release Packages
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
@@ -22,17 +19,21 @@ jobs:
   package-linux:
     name: Package Linux (x86_64)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Build and package in Debian 12 container
-        run: |
-          docker build -f docker/debian-12.Dockerfile -t openaudit-ci:debian-12 .
-          docker run --rm -v "$(pwd):/workspace" -w /workspace openaudit-ci:debian-12 bash -c "./scripts/package-release.sh"
+      - name: Build Debian 12 baseline packaging container
+        run: docker build -f docker/debian-12.Dockerfile -t openaudit-ci:debian-12 .
 
-      - name: Test clean installation on pristine Ubuntu 24.04 and Debian 12
+      - name: Run workspace tests in Debian 12 baseline environment
+        run: docker run --rm -v "$(pwd):/workspace" -w /workspace openaudit-ci:debian-12 bash -c "cargo test --verbose"
+
+      - name: Build release packages in Debian 12 container
+        run: docker run --rm -v "$(pwd):/workspace" -w /workspace openaudit-ci:debian-12 bash -c "./scripts/package-release.sh"
+
+      - name: Test clean installation on pristine Ubuntu 24.04, Debian 12 and Debian 13
         run: ./scripts/test-clean-install.sh
 
       - name: Upload Linux Packages
@@ -55,10 +56,15 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Run core and engine test suite on native macOS runner
+        run: |
+          cargo test -p openaudit-core --lib -- --skip tpm
+          cargo test -p openaudit-engine --verbose
+
       - name: Build and package portable bundle
         run: ./scripts/package-release.sh
 
-      - name: Verify clean execution
+      - name: Verify clean CLI execution and standalone HTML report
         run: |
           ./target/release/openaudit-cli version
           ./target/release/openaudit-cli scan --format human
@@ -83,6 +89,12 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Run core and engine test suite on native Windows runner
+        shell: pwsh
+        run: |
+          cargo test -p openaudit-core --lib -- --skip tpm
+          cargo test -p openaudit-engine --verbose
 
       - name: Build release binaries
         run: cargo build --release --bins
@@ -112,13 +124,26 @@ jobs:
           Compress-Archive -Path "$stage/*" -DestinationPath "$distDir/openaudit-$ver-windows-x86_64.zip" -Force
           Get-FileHash "$distDir/openaudit-$ver-windows-x86_64.zip" -Algorithm SHA256 | Out-File -FilePath "$distDir/SHA256SUMS-windows.txt"
 
-      - name: Test Windows CLI execution
+      - name: Test Windows CLI execution and HTML report generation
         shell: pwsh
         run: |
           ./target/release/openaudit-cli.exe version
           ./target/release/openaudit-cli.exe scan --format human
           ./target/release/openaudit-cli.exe report --format html --output ./test-report.html
           if (-not (Test-Path ./test-report.html)) { throw "HTML report not generated!" }
+
+      - name: Test Windows Service installation and uninstallation scripts
+        shell: pwsh
+        run: |
+          # Test installation
+          powershell -ExecutionPolicy Bypass -File packaging/windows/install-service.ps1 -InstallDir "target/release"
+          $svc = Get-Service -Name "OpenAuditAgent"
+          if ($svc.Status -ne "Running") { throw "OpenAuditAgent service is not running!" }
+
+          # Test uninstallation
+          powershell -ExecutionPolicy Bypass -File packaging/windows/uninstall-service.ps1
+          $svcCheck = Get-Service -Name "OpenAuditAgent" -ErrorAction SilentlyContinue
+          if ($svcCheck) { throw "OpenAuditAgent service was not properly removed!" }
 
       - name: Upload Windows Packages
         uses: actions/upload-artifact@v4
