@@ -2,6 +2,7 @@
 
 pub mod env;
 pub mod firewall;
+pub mod macos;
 pub mod os;
 pub mod permissions;
 pub mod ports;
@@ -238,6 +239,12 @@ pub struct HostInspectionContext {
     pub windows_services: Option<windows::WindowsServicesInfo>,
     /// Windows local user and administrative account posture.
     pub windows_accounts: Option<windows::WindowsAccountsInfo>,
+    /// macOS system endpoint protection and security configuration.
+    pub macos_security: Option<macos::MacosSecurityInfo>,
+    /// macOS local user and administrative account posture.
+    pub macos_accounts: Option<macos::MacosAccountsInfo>,
+    /// macOS `LaunchDaemons` and `LaunchAgents` security posture.
+    pub macos_launchd: Option<macos::MacosLaunchdInfo>,
     /// Host execution privilege level at time of audit.
     pub current_privilege: PrivilegeLevel,
 }

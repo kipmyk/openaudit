@@ -286,6 +286,7 @@ impl<FS: FileSystem + Send + Sync, CR: CommandRunner + Send + Sync> PlatformBack
             windows_services,
             windows_accounts,
             current_privilege,
+            ..Default::default()
         })
     }
 }

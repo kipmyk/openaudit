@@ -225,6 +225,8 @@ pub enum PlatformCapability {
     MacosGatekeeper,
     /// macOS System Integrity Protection (SIP) status.
     MacosSip,
+    /// macOS `FileVault` disk encryption status.
+    MacosFileVault,
 }
 
 impl fmt::Display for PlatformCapability {
@@ -242,6 +244,7 @@ impl fmt::Display for PlatformCapability {
             Self::WindowsDefender => write!(f, "windows_defender"),
             Self::MacosGatekeeper => write!(f, "macos_gatekeeper"),
             Self::MacosSip => write!(f, "macos_sip"),
+            Self::MacosFileVault => write!(f, "macos_filevault"),
         }
     }
 }
@@ -371,7 +374,7 @@ pub fn detect_current_platform<
 
     #[cfg(target_os = "macos")]
     {
-        Box::new(MacosPlatformBackend::detect())
+        Box::new(MacosPlatformBackend::detect_with(fs, runner))
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -529,6 +532,7 @@ mod tests {
             PlatformCapability::WindowsDefender,
             PlatformCapability::MacosGatekeeper,
             PlatformCapability::MacosSip,
+            PlatformCapability::MacosFileVault,
         ];
 
         for cap in caps {
