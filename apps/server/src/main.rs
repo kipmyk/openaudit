@@ -223,6 +223,7 @@ fn print_help() {
           authority token-issue            Issue and persist a single-use enrollment token\n  \
           authority process-enrollment     Validate enrollment transcript and HMAC proof\n  \
           authority process-retrieval      Verify retrieval request and enforce replay cache\n  \
+          authority catalog-init           Initialize a baseline catalog repository\n  \
           authority catalog-update         Execute 6-stage catalog promotion synchronized with TPM counter\n  \
           authority recover-catalog        Reconcile catalog consistency against TPM counter (CB-01..13)\n  \
           version                          Print version information\n  \
@@ -617,6 +618,57 @@ fn run_authority_recover_catalog(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_authority_catalog_init(args: &[String]) -> Result<(), String> {
+    let data_dir = get_data_dir(args);
+    let mut version: u64 = 1;
+    let mut counter: u64 = 1;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--version" => {
+                i += 1;
+                if i < args.len() {
+                    if let Ok(v) = args[i].parse::<u64>() {
+                        version = v;
+                    }
+                }
+            }
+            "--counter" => {
+                i += 1;
+                if i < args.len() {
+                    if let Ok(c) = args[i].parse::<u64>() {
+                        counter = c;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let catalog_mgr = CatalogManager::open(data_dir.join("catalog"))
+        .map_err(|err| format!("failed to open catalog manager: {err}"))?;
+
+    let base_catalog = AssessmentCatalog::new(
+        version,
+        counter,
+        serde_json::json!({"baseline": "initial_m3_d4", "version": version}),
+    )
+    .map_err(|err| format!("failed to construct baseline catalog: {err}"))?;
+
+    catalog_mgr
+        .initialize_new(&base_catalog)
+        .map_err(|err| format!("failed to initialize catalog: {err}"))?;
+
+    println!("CATALOG_INIT: SUCCESS");
+    println!("VERSION: {version}");
+    println!("COUNTER: {counter}");
+    println!("PAYLOAD_HASH: {}", base_catalog.payload_hash);
+
+    Ok(())
+}
+
 /// Dispatches command line arguments to subcommands.
 ///
 /// # Errors
@@ -638,13 +690,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         "authority" => {
             if args.len() < 3 {
-                return Err("missing authority subcommand: status, token-issue, process-enrollment, process-retrieval, catalog-update, recover-catalog".to_string());
+                return Err("missing authority subcommand: status, token-issue, process-enrollment, process-retrieval, catalog-init, catalog-update, recover-catalog".to_string());
             }
             match args[2].as_str() {
                 "status" => run_authority_status(&args[3..]),
                 "token-issue" => run_authority_token_issue(&args[3..]),
                 "process-enrollment" => run_authority_process_enrollment(&args[3..]),
                 "process-retrieval" => run_authority_process_retrieval(&args[3..]),
+                "catalog-init" => run_authority_catalog_init(&args[3..]),
                 "catalog-update" => run_authority_catalog_update(&args[3..]),
                 "recover-catalog" => run_authority_recover_catalog(&args[3..]),
                 other => Err(format!("unknown authority subcommand: '{other}'")),
@@ -1010,5 +1063,31 @@ mod tests {
             "process-retrieval".to_string(),
         ];
         assert!(run(&bad_retrieve).is_err());
+    }
+
+    #[test]
+    fn test_server_catalog_init_cli() {
+        let temp = TestDir::new();
+        let data_dir = temp.path().join("authority_data");
+
+        let init_args = vec![
+            "openaudit-server".to_string(),
+            "authority".to_string(),
+            "catalog-init".to_string(),
+            "--version".to_string(),
+            "1".to_string(),
+            "--counter".to_string(),
+            "1".to_string(),
+            "--data-dir".to_string(),
+            data_dir.to_str().unwrap().to_string(),
+        ];
+
+        let res = run(&init_args);
+        assert!(res.is_ok(), "catalog-init must succeed: {res:?}");
+        assert!(data_dir.join("catalog").join("catalog.json").is_file());
+
+        // Second init must fail because active catalog already exists
+        let res2 = run(&init_args);
+        assert!(res2.is_err(), "second catalog-init must fail: {res2:?}");
     }
 }
