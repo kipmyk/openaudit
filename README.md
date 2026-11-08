@@ -30,21 +30,34 @@ OpenAudit gives organizations complete ownership of their security data and the 
 
 ## 3. Current Status
 
-> **Current Status: Pre-Alpha (`v0.2.0-m2`)**  
-> OpenAudit has completed **Milestone M2 (Linux Auditing Engine)** with release **`v0.2.0-m2`**. 
-> The local host auditing CLI evaluates 20 built-in security rules across 55 verified empirical lab scenarios with 100% precision and recall on Ubuntu 24.04 LTS.
+> **Current Status: Pre-Alpha (M3 In Progress)**<br>
+> **Latest Completed Release:** [`v0.2.0-m2`](https://github.com/kipmyk/openaudit/releases/tag/v0.2.0-m2) (Milestone M2: Linux Auditing Engine).<br>
+> The M2 local host auditing CLI evaluates 20 built-in security rules across 55 verified empirical lab scenarios with 100% precision and recall on Ubuntu 24.04 LTS.
 
 | Milestone | Scope | Status |
 |---|---|---|
 | **M0: Foundation** | Project architecture, threat modeling, workspace foundation, CI | **Completed** |
 | **M1: Core Domain** | Domain models (Asset, Scan, Finding, Severity, Evidence), error types | **Completed** |
 | **M2: Linux Auditing Engine** | Local host audit (Ubuntu/Debian) via standalone CLI (`v0.2.0-m2`) | **Completed (55 Lab Scenarios, 100% Precision/Recall)** |
-| **M3: Cross-Platform & Validation** | Core platform abstraction, multi-distro validation, Windows/macOS | Planned |
+| **M3: Cross-Platform & Validation** | Core platform abstraction, multi-distribution validation, Windows/macOS support, cross-platform testing, and security foundations for distributed auditing | **In Progress** |
 | **M4: Agentless Perimeter Auditing** | DNS, TLS, and HTTP security posture checks with SSRF defenses | Planned |
 | **M5: Control Plane & Persistence** | Axum HTTP API, PostgreSQL persistence, transactional scheduling | Planned |
 | **M6: Agent Communication** | Outbound agent polling, identity management, secure enrollment | Planned |
 | **M7: Reporting & Lifecycle** | Finding lifecycle, diff tracking, evidence export (JSON/HTML) | Planned |
 | **M8: Public Alpha** | End-to-end verified release and documented deployment | Planned |
+
+### Milestone M3 & D4 Status Note
+
+Milestone M3 is actively in progress. As part of M3, the **D4 Deliverable (Subject-Bound Remote Authority & Agent Attestation)** represents a cross-cutting security foundation providing TPM 2.0 hardware identity binding, crash-resilient catalog distribution, replay-protected token authorization, and pure TLS 1.3 transport.
+
+- **D4 Acceptance Status:** **Accepted with Qualifications**.
+- **Software Implementation & Emulator Verification:** Fully implemented and validated across automated workspace tests, including complete 10-step cross-binary server/agent TLS 1.3 enrollment and catalog retrieval workflows against software TPM 2.0 emulation (`swtpm`).
+- **Outstanding Qualifications (Hardware & External Audit):**
+  1. *Physical TPM 2.0 Hardware Qualification:* Validated against `swtpm` emulation; qualification on physical discrete/firmware TPM hardware (`/dev/tpmrm0`) remains pending execution on physical Linux hardware using `scripts/qualify_physical_tpm.sh`. Emulator testing does not constitute physical TPM hardware qualification.
+  2. *Controlled Physical Power-Loss Bench Testing:* Validated via software crash-recovery matrices (CB-01..13) and atomic WAL rollback testing; qualification on physical hardware with abrupt relay bench power severance remains pending execution using `scripts/qualify_power_loss.sh`.
+  3. *Independent External Security Assessment:* Internal threat models, cryptographic bounds, and security review handoff packages are prepared in `docs/M3-D4-SECURITY-ASSESSMENT-PACKAGE.md` and `docs/M3-D4-REVIEWER-HANDOFF.md`; independent third-party penetration testing and formal code audit remain pending external review.
+
+Completion of the D4 security workstream does not constitute full M3 acceptance. Milestone M3 remains open until all original cross-platform abstraction and multi-distribution validation criteria (Linux, macOS, Windows) are satisfied.
 
 ---
 
