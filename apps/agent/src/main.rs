@@ -19,8 +19,8 @@ use openaudit_core::protocol::catalog::MonotonicCounter;
 use openaudit_core::protocol::crypto::compute_hmac_sha256;
 use openaudit_core::protocol::error::ProtocolError;
 use openaudit_core::protocol::tpm::{
-    DeviceTransport, ProvisioningState, TpmClient, TpmCounterConfig, TpmMonotonicCounter,
-    TpmProvisioningManager, UnixSocketTransport,
+    resolve_tpm_device_path, DeviceTransport, ProvisioningState, TpmClient, TpmCounterConfig,
+    TpmMonotonicCounter, TpmProvisioningManager, UnixSocketTransport,
 };
 use openaudit_core::protocol::types::{
     CatalogVersion, ChallengeNonce, EnrollmentGeneration, EnrollmentTokenId, LifecycleId,
@@ -59,20 +59,26 @@ impl MonotonicCounter for AgentMonotonicCounter {
     }
 }
 
-/// Opens a hardware character device or software socket as an [`AgentMonotonicCounter`].
-fn open_monotonic_counter(tpm_path: &Path) -> AgentMonotonicCounter {
+fn is_socket_path(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
-        if let Ok(meta) = fs::metadata(tpm_path) {
-            if meta.file_type().is_char_device() {
-                let client = TpmClient::new(DeviceTransport::new(tpm_path));
-                return AgentMonotonicCounter::Device(TpmMonotonicCounter::new(
-                    client,
-                    TpmCounterConfig::default(),
-                ));
-            }
+        if let Ok(meta) = fs::metadata(path) {
+            return meta.file_type().is_socket();
         }
+    }
+    let p_str = path.to_string_lossy();
+    p_str.ends_with(".sock") || p_str.contains("/sock")
+}
+
+/// Opens a hardware character device or software socket as an [`AgentMonotonicCounter`].
+fn open_monotonic_counter(tpm_path: &Path) -> AgentMonotonicCounter {
+    if !is_socket_path(tpm_path) {
+        let client = TpmClient::new(DeviceTransport::new(tpm_path));
+        return AgentMonotonicCounter::Device(TpmMonotonicCounter::new(
+            client,
+            TpmCounterConfig::default(),
+        ));
     }
 
     let client = TpmClient::new(UnixSocketTransport::new(tpm_path));
@@ -89,18 +95,12 @@ fn execute_provisioning(
     rotate: bool,
     override_quarantine: bool,
 ) -> Result<(ProvisioningState, u64), ProtocolError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::FileTypeExt;
-        if let Ok(meta) = fs::metadata(tpm_path) {
-            if meta.file_type().is_char_device() {
-                let client = TpmClient::new(DeviceTransport::new(tpm_path));
-                let mut mgr = TpmProvisioningManager::new(client, state_dir);
-                let state = mgr.determine_state(rotate)?;
-                let counter = mgr.execute(rotate, override_quarantine, None)?;
-                return Ok((state, counter));
-            }
-        }
+    if !is_socket_path(tpm_path) {
+        let client = TpmClient::new(DeviceTransport::new(tpm_path));
+        let mut mgr = TpmProvisioningManager::new(client, state_dir);
+        let state = mgr.determine_state(rotate)?;
+        let counter = mgr.execute(rotate, override_quarantine, None)?;
+        return Ok((state, counter));
     }
 
     let client = TpmClient::new(UnixSocketTransport::new(tpm_path));
@@ -248,7 +248,7 @@ fn print_help() {
           version              Print version information\n  \
           help                 Print this help message\n\n\
         Options:\n  \
-          --tpm <PATH>         Path to TPM character device or Unix socket\n  \
+          --tpm <PATH>         Path to TPM character device or Unix socket [default: /dev/tpmrm0]\n  \
           --state-dir <DIR>    Node credentials directory\n  \
           --secret-file <PATH> Path to 32-byte secret file (mode 0600)\n",
         openaudit_core::version()
@@ -299,8 +299,7 @@ fn run_provision(args: &[String]) -> Result<(), String> {
         i += 1;
     }
 
-    let t_path =
-        tpm_path.ok_or_else(|| "missing mandatory argument: --tpm <PATH_OR_SOCKET>".to_string())?;
+    let t_path = resolve_tpm_device_path(tpm_path.as_deref());
     let s_dir =
         state_dir.ok_or_else(|| "missing mandatory argument: --state-dir <DIR>".to_string())?;
 
@@ -484,8 +483,7 @@ fn run_enroll(args: &[String]) -> Result<(), String> {
         token_id_hex.ok_or_else(|| "missing mandatory argument: --token-id <HEX>".to_string())?;
     let non_hex =
         nonce_hex.ok_or_else(|| "missing mandatory argument: --nonce <HEX>".to_string())?;
-    let t_path =
-        tpm_path.ok_or_else(|| "missing mandatory argument: --tpm <PATH_OR_SOCKET>".to_string())?;
+    let t_path = resolve_tpm_device_path(tpm_path.as_deref());
     let s_dir =
         state_dir.ok_or_else(|| "missing mandatory argument: --state-dir <DIR>".to_string())?;
 
@@ -958,6 +956,33 @@ mod tests {
 
         let bad_retrieve = vec!["openaudit-agent".to_string(), "retrieve".to_string()];
         assert!(run(&bad_retrieve).is_err());
+    }
+
+    #[test]
+    fn test_agent_default_tpmrm_resolution_diagnostic() {
+        let temp = TestDir::new();
+        let state_dir = temp.path().join("agent_state");
+
+        // Omit --tpm: defaults to /dev/tpmrm0 (or /dev/tpm0)
+        let prov_args = vec![
+            "openaudit-agent".to_string(),
+            "provision".to_string(),
+            "--state-dir".to_string(),
+            state_dir.to_str().unwrap().to_string(),
+        ];
+
+        let res = run(&prov_args);
+        // On macOS / environments without /dev/tpmrm0, must fail with diagnostic
+        if !Path::new("/dev/tpmrm0").exists() && !Path::new("/dev/tpm0").exists() {
+            assert!(res.is_err(), "must fail when hardware TPM device is absent");
+            let err = res.err().unwrap();
+            assert!(
+                err.contains("TPM 2.0 device node not found")
+                    || err.contains("failed to open TPM device node")
+                    || err.contains("TPM socket connect failed"),
+                "error must provide diagnostic context: {err}"
+            );
+        }
     }
 
     #[test]
