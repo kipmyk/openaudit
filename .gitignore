@@ -36,6 +36,11 @@ private/
 /scratch/
 /tmp/
 
+# Demonstration and test recording artifacts
+/artifacts/
+/playwright-report/
+/test-results/
+
 # Whitelist project test directories (overriding any global gitignore)
 !tests/
 !**/tests/

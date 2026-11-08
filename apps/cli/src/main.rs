@@ -5,6 +5,8 @@
 
 use std::env;
 use std::fmt::Write as _;
+use std::fs;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use openaudit_core::{OrganizationId, Severity};
@@ -40,6 +42,8 @@ pub struct CliConfig {
     pub min_severity: Severity,
     pub profile: AuditProfile,
     pub fail_on: Option<Severity>,
+    pub input_file: Option<PathBuf>,
+    pub output_file: Option<PathBuf>,
 }
 
 impl Default for CliConfig {
@@ -49,6 +53,8 @@ impl Default for CliConfig {
             min_severity: Severity::Info,
             profile: AuditProfile::Baseline,
             fail_on: None,
+            input_file: None,
+            output_file: None,
         }
     }
 }
@@ -70,7 +76,9 @@ fn print_help() {
           --format <human|json|html>          Output format (default: human)\n  \
           --min-severity <level>              Filter findings by minimum severity (info..critical)\n  \
           --fail-on <level>                   Exit with code 2 if findings >= level are found\n  \
-          --strict                            Equivalent to --fail-on high\n",
+          --strict                            Equivalent to --fail-on high\n  \
+          --input <path>                      Input audit report JSON file for report generation\n  \
+          --output <path>                     Write report output directly to file\n",
         openaudit_core::version()
     );
 }
@@ -84,15 +92,60 @@ fn run_scan(config: &CliConfig) -> Result<ExitCode, Box<dyn std::error::Error>> 
     let engine = AuditEngine::default();
     let report = engine.run_audit_with_profile(org_id, config.profile)?;
 
-    match config.format {
-        OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&report)?);
-        }
+    let output_str = match config.format {
+        OutputFormat::Json => serde_json::to_string_pretty(&report)?,
         OutputFormat::Human => {
             render_human_report(&report, config.min_severity);
+            String::new()
         }
-        OutputFormat::Html => {
-            println!("{}", render_html_report(&report));
+        OutputFormat::Html => render_html_report(&report),
+    };
+
+    if !output_str.is_empty() {
+        if let Some(ref out_path) = config.output_file {
+            fs::write(out_path, output_str)?;
+        } else {
+            println!("{output_str}");
+        }
+    }
+
+    if let Some(threshold) = config.fail_on {
+        let has_violations = report
+            .findings
+            .iter()
+            .any(|item| item.finding.severity >= threshold);
+        if has_violations {
+            return Ok(exit_codes::findings_detected());
+        }
+    }
+
+    Ok(exit_codes::SUCCESS)
+}
+
+fn run_report(config: &CliConfig) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    let report: AuditReport = if let Some(ref in_path) = config.input_file {
+        let content = fs::read_to_string(in_path)?;
+        serde_json::from_str(&content)?
+    } else {
+        let org_id = OrganizationId::from_seed(b"openaudit:local:default-org");
+        let engine = AuditEngine::default();
+        engine.run_audit_with_profile(org_id, config.profile)?
+    };
+
+    let output_str = match config.format {
+        OutputFormat::Json => serde_json::to_string_pretty(&report)?,
+        OutputFormat::Human => {
+            render_human_report(&report, config.min_severity);
+            String::new()
+        }
+        OutputFormat::Html => render_html_report(&report),
+    };
+
+    if !output_str.is_empty() {
+        if let Some(ref out_path) = config.output_file {
+            fs::write(out_path, output_str)?;
+        } else {
+            println!("{output_str}");
         }
     }
 
@@ -505,6 +558,18 @@ fn main() -> ExitCode {
             "--strict" => {
                 config.fail_on = Some(Severity::High);
             }
+            "--input" => {
+                if i + 1 < args.len() {
+                    config.input_file = Some(PathBuf::from(&args[i + 1]));
+                    i += 1;
+                }
+            }
+            "--output" => {
+                if i + 1 < args.len() {
+                    config.output_file = Some(PathBuf::from(&args[i + 1]));
+                    i += 1;
+                }
+            }
             other => {
                 eprintln!("Unknown argument '{other}'. Run 'openaudit-cli --help' for usage.");
                 return exit_codes::FAILURE;
@@ -535,7 +600,7 @@ fn main() -> ExitCode {
                 exit_codes::FAILURE
             }
         },
-        "report" => match run_scan(&config) {
+        "report" => match run_report(&config) {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("Report generation failed: {err}");

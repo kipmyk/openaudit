@@ -28,7 +28,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     --component clippy
 
 # Install cargo-audit for dependency security audits
-RUN cargo install cargo-audit --locked
+RUN cargo install cargo-audit --version 0.22.2 --locked
 
 WORKDIR /workspace
 

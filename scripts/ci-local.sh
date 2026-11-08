@@ -98,29 +98,34 @@ case "${SUITE}" in
         echo "================================================================================"
 
         echo ""
-        echo "[1/5] Checking code formatting..."
+        echo "[1/6] Checking code formatting..."
         run_in_container "cargo fmt --all --check"
         echo "[+] Formatting verified."
 
         echo ""
-        echo "[2/5] Running Clippy linter across all targets..."
+        echo "[2/6] Running Clippy linter across all targets..."
         run_in_container "cargo clippy --all-targets --workspace -- -D warnings"
         echo "[+] Clippy checks passed with 0 warnings."
 
         echo ""
-        echo "[3/5] Building workspace binaries..."
+        echo "[3/6] Building workspace binaries..."
         run_in_container "cargo build --bins"
         echo "[+] Workspace binaries compiled successfully."
 
         echo ""
-        echo "[4/5] Executing complete workspace test suite (including TPM emulation)..."
+        echo "[4/6] Executing complete workspace test suite (including TPM emulation)..."
         run_in_container "cargo test --workspace --verbose"
         echo "[+] Complete workspace tests passed."
 
         echo ""
-        echo "[5/5] Checking workspace documentation..."
+        echo "[5/6] Checking workspace documentation..."
         run_in_container "cargo doc --workspace --no-deps"
         echo "[+] Documentation generated without errors."
+
+        echo ""
+        echo "[6/6] Running dependency security audit..."
+        run_in_container "cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0387 --ignore RUSTSEC-2025-0134"
+        echo "[+] Dependency security audit clean."
 
         echo ""
         echo "================================================================================"
