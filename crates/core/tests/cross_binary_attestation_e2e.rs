@@ -161,6 +161,15 @@ fn get_binary_path(bin_name: &str) -> PathBuf {
         return target_debug;
     }
 
+    // Attempt on-demand compilation if not present
+    let _ = Command::new("cargo")
+        .args(["build", "--bin", bin_name])
+        .output();
+
+    if target_debug.is_file() {
+        return target_debug;
+    }
+
     panic!(
         "compiled binary '{}' not found at '{}'; ensure cargo build --bins was executed",
         bin_name,

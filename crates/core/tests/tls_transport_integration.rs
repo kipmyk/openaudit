@@ -547,6 +547,14 @@ fn test_cross_binary_tls13_enrollment_and_retrieval() {
     let server_bin = target_dir.join("openaudit-server");
     let agent_bin = target_dir.join("openaudit-agent");
 
+    if !server_bin.is_file() || !agent_bin.is_file() {
+        let _ = Command::new("cargo").args(["build", "--bins"]).output();
+    }
+
+    if !server_bin.is_file() || !agent_bin.is_file() {
+        let _ = Command::new("cargo").args(["build", "--bins"]).output();
+    }
+
     assert!(server_bin.is_file(), "server binary must exist");
     assert!(agent_bin.is_file(), "agent binary must exist");
 
@@ -737,6 +745,10 @@ fn test_replay_protection_over_tls_transport() {
 
     let server_bin = target_dir.join("openaudit-server");
     let agent_bin = target_dir.join("openaudit-agent");
+
+    if !server_bin.is_file() || !agent_bin.is_file() {
+        let _ = Command::new("cargo").args(["build", "--bins"]).output();
+    }
 
     let temp_root = std::env::temp_dir().join(format!("oa_tls_replay_{}", std::process::id()));
     fs::create_dir_all(&temp_root).unwrap();
@@ -945,6 +957,10 @@ fn test_cross_binary_complete_tls13_lifecycle_with_restart() {
 
     let server_bin = target_dir.join("openaudit-server");
     let agent_bin = target_dir.join("openaudit-agent");
+
+    if !server_bin.is_file() || !agent_bin.is_file() {
+        let _ = Command::new("cargo").args(["build", "--bins"]).output();
+    }
 
     let temp_root = std::env::temp_dir().join(format!("oa_tls_lifecycle_{}", std::process::id()));
     fs::create_dir_all(&temp_root).unwrap();
