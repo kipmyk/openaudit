@@ -411,6 +411,8 @@ fn run_enroll(args: &[String]) -> Result<(), String> {
     let mut secret_path: Option<PathBuf> = None;
     let mut tx_id_arg: Option<String> = None;
     let mut catalog_base_arg: u64 = 1;
+    let mut expires_at_arg: Option<i64> = None;
+    let mut ttl_secs_arg: u64 = 60;
 
     let mut i = 0;
     while i < args.len() {
@@ -456,6 +458,20 @@ fn run_enroll(args: &[String]) -> Result<(), String> {
                 if i < args.len() {
                     if let Ok(v) = args[i].parse::<u64>() {
                         catalog_base_arg = v;
+                    }
+                }
+            }
+            "--expires-at-ns" => {
+                i += 1;
+                if i < args.len() {
+                    expires_at_arg = args[i].parse::<i64>().ok();
+                }
+            }
+            "--ttl-secs" => {
+                i += 1;
+                if i < args.len() {
+                    if let Ok(v) = args[i].parse::<u64>() {
+                        ttl_secs_arg = v;
                     }
                 }
             }
@@ -573,7 +589,17 @@ fn run_enroll(args: &[String]) -> Result<(), String> {
 
     let now = current_time_ns()?;
     let t_issued = now;
-    let t_expires = TimestampNs::from_nanos(now.as_nanos() + 300_000_000_000); // 300s TTL
+    let t_expires = expires_at_arg.map_or_else(
+        || {
+            let ttl_nanos = ttl_secs_arg
+                .checked_mul(1_000_000_000)
+                .unwrap_or(60_000_000_000);
+            TimestampNs::from_nanos(
+                now.as_nanos() + i64::try_from(ttl_nanos).unwrap_or(60_000_000_000),
+            )
+        },
+        TimestampNs::from_nanos,
+    );
 
     let (transcript, proof) = client
         .construct_enrollment_transcript(
