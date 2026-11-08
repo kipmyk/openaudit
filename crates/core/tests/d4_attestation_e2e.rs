@@ -21,8 +21,8 @@ use openaudit_core::protocol::{
     AgentAttestationClient, AgentCredentials, AssessmentCatalog, AuthorityService, CatalogManager,
     CatalogVersion, ChallengeNonce, EnrollmentGeneration, LifecycleId, MachineId,
     MockMonotonicCounter, MonotonicCounter, ProtocolError, RecoveryOutcome, SharedSecret,
-    SqliteReplayStore, SrkName, TimestampNs, TpmClient, TpmCounterConfig, TpmMonotonicCounter,
-    TpmProvisioningManager, TransactionId, UnixSocketTransport,
+    SqliteAuthorityStore, SqliteReplayStore, SrkName, TimestampNs, TpmClient, TpmCounterConfig,
+    TpmMonotonicCounter, TpmProvisioningManager, TransactionId, UnixSocketTransport,
 };
 
 static E2E_TEST_MUTEX: Mutex<()> = Mutex::new(());
@@ -181,7 +181,13 @@ impl Drop for LiveSwtpm {
     }
 }
 
-fn setup_authority_and_storage() -> (AuthorityService, TempDir, TempDir) {
+fn setup_authority_and_storage() -> (AuthorityService, TempDir, TempDir, TempDir) {
+    let auth_dir = tempfile::tempdir().expect("auth dir creation");
+    let auth_db_path = auth_dir.path().join("authority.db");
+    let auth_store = Arc::new(
+        SqliteAuthorityStore::open(&auth_db_path).expect("sqlite authority store initialization"),
+    );
+
     let replay_dir = tempfile::tempdir().expect("replay dir creation");
     let replay_db_path = replay_dir.path().join("replay.db");
     let replay_store = Arc::new(
@@ -199,8 +205,8 @@ fn setup_authority_and_storage() -> (AuthorityService, TempDir, TempDir) {
         .initialize_new(&base_catalog)
         .expect("baseline catalog initialization");
 
-    let authority = AuthorityService::new(replay_store, catalog_mgr);
-    (authority, replay_dir, catalog_dir)
+    let authority = AuthorityService::new(auth_store, replay_store, catalog_mgr);
+    (authority, auth_dir, replay_dir, catalog_dir)
 }
 
 #[test]
@@ -244,7 +250,7 @@ fn test_e2e_valid_enrollment_workflow_succeeds() {
     let agent = AgentAttestationClient::new(creds, tpm_counter);
 
     // 3. Setup Authority
-    let (authority, _replay_dir, _cat_dir) = setup_authority_and_storage();
+    let (authority, _auth_dir, _replay_dir, _cat_dir) = setup_authority_and_storage();
 
     // 4. Authority issues enrollment token
     let nonce = ChallengeNonce::from_bytes([0x77u8; 32]);
@@ -290,11 +296,12 @@ fn test_e2e_valid_enrollment_workflow_succeeds() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn test_e2e_enrollment_negative_security_scenarios() {
     let _lock = E2E_TEST_MUTEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (authority, _replay_dir, _cat_dir) = setup_authority_and_storage();
+    let (authority, _auth_dir, _replay_dir, _cat_dir) = setup_authority_and_storage();
 
     let machine_id = MachineId::new();
     let secret = SharedSecret::from_bytes([0x55u8; 32]);
@@ -338,6 +345,15 @@ fn test_e2e_enrollment_negative_security_scenarios() {
     let err_hmac =
         authority.process_enrollment(&transcript, &bad_proof, agent.shared_secret(), now);
     assert!(matches!(err_hmac, Err(ProtocolError::InvalidHmacProof)));
+    assert!(
+        !authority
+            .authority_store()
+            .get_token(&token.token_id)
+            .unwrap()
+            .unwrap()
+            .consumed,
+        "invalid HMAC proof must not consume token in SQLite store"
+    );
 
     // 2. Malformed SPKI is rejected; token is NOT consumed
     let mut malformed_transcript = transcript.clone();
@@ -352,6 +368,15 @@ fn test_e2e_enrollment_negative_security_scenarios() {
         now,
     );
     assert!(matches!(err_spki, Err(ProtocolError::MalformedDerKey(_))));
+    assert!(
+        !authority
+            .authority_store()
+            .get_token(&token.token_id)
+            .unwrap()
+            .unwrap()
+            .consumed,
+        "malformed SPKI must not consume token in SQLite store"
+    );
 
     // 3. Invalid challenge nonce is rejected
     let mut wrong_nonce_transcript = transcript.clone();
@@ -365,16 +390,43 @@ fn test_e2e_enrollment_negative_security_scenarios() {
         now,
     );
     assert!(err_nonce.is_err());
+    assert!(
+        !authority
+            .authority_store()
+            .get_token(&token.token_id)
+            .unwrap()
+            .unwrap()
+            .consumed,
+        "nonce mismatch must not consume token in SQLite store"
+    );
 
     // 4. Expired enrollment is rejected
     let future_now = TimestampNs::from_nanos(now.as_nanos() + 400_000_000_000); // 400s later (past 300s TTL)
     let err_exp =
         authority.process_enrollment(&transcript, &valid_proof, agent.shared_secret(), future_now);
     assert!(err_exp.is_err());
+    assert!(
+        !authority
+            .authority_store()
+            .get_token(&token.token_id)
+            .unwrap()
+            .unwrap()
+            .consumed,
+        "expired enrollment must not consume token in SQLite store"
+    );
 
     // 5. Valid enrollment now succeeds with original valid token
     let ok = authority.process_enrollment(&transcript, &valid_proof, agent.shared_secret(), now);
     assert!(ok.is_ok());
+    assert!(
+        authority
+            .authority_store()
+            .get_token(&token.token_id)
+            .unwrap()
+            .unwrap()
+            .consumed,
+        "successful enrollment must mark token consumed in SQLite store"
+    );
 
     // 6. Token reuse is REJECTED (single-use constraint)
     let err_reuse =
@@ -387,7 +439,7 @@ fn test_e2e_concurrent_duplicate_enrollment_race_fails_closed() {
     let _lock = E2E_TEST_MUTEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (authority, _replay_dir, _cat_dir) = setup_authority_and_storage();
+    let (authority, _auth_dir, _replay_dir, _cat_dir) = setup_authority_and_storage();
     let auth = Arc::new(authority);
 
     let machine_id = MachineId::new();
@@ -462,7 +514,7 @@ fn test_e2e_outbox_retrieval_and_replay_protection() {
     let _lock = E2E_TEST_MUTEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (authority, _replay_dir, _cat_dir) = setup_authority_and_storage();
+    let (authority, _auth_dir, _replay_dir, _cat_dir) = setup_authority_and_storage();
 
     let machine_id = MachineId::new();
     let secret = SharedSecret::from_bytes([0x77u8; 32]);
@@ -516,7 +568,7 @@ fn test_e2e_concurrent_duplicate_retrieval_race() {
     let _lock = E2E_TEST_MUTEX
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (authority, _replay_dir, _cat_dir) = setup_authority_and_storage();
+    let (authority, _auth_dir, _replay_dir, _cat_dir) = setup_authority_and_storage();
     let auth = Arc::new(authority);
 
     let machine_id = MachineId::new();
@@ -592,7 +644,7 @@ fn test_e2e_catalog_durability_and_tpm_synchronization() {
     let mut tpm_counter = TpmMonotonicCounter::new(tpm_client, TpmCounterConfig::default());
 
     // 2. Setup Authority
-    let (authority, _replay_dir, _cat_dir) = setup_authority_and_storage();
+    let (authority, _auth_dir, _replay_dir, _cat_dir) = setup_authority_and_storage();
 
     // 3. Update catalog to version 2 (counter target = 2)
     let v2_catalog = AssessmentCatalog::new(2, 2, serde_json::json!({"release": "catalog_v2"}))
@@ -631,6 +683,12 @@ fn test_e2e_catalog_tpm_desynchronization_fails_closed() {
     let tpm_client = swtpm.connect_client();
     let tpm_counter = TpmMonotonicCounter::new(tpm_client, TpmCounterConfig::default());
 
+    let auth_dir = tempfile::tempdir().expect("auth dir creation");
+    let auth_db_path = auth_dir.path().join("authority.db");
+    let auth_store = Arc::new(
+        SqliteAuthorityStore::open(&auth_db_path).expect("sqlite authority store initialization"),
+    );
+
     let replay_dir = tempfile::tempdir().expect("replay dir creation");
     let replay_db_path = replay_dir.path().join("replay.db");
     let replay_store = Arc::new(
@@ -646,7 +704,7 @@ fn test_e2e_catalog_tpm_desynchronization_fails_closed() {
         AssessmentCatalog::new(2, 9999, serde_json::json!({"desync": true})).unwrap();
     catalog_mgr.initialize_new(&desync_catalog).unwrap();
 
-    let authority = AuthorityService::new(replay_store, catalog_mgr);
+    let authority = AuthorityService::new(auth_store, replay_store, catalog_mgr);
 
     // Recovery must detect desync and fail closed!
     let res = authority.recover_catalog(&tpm_counter);
@@ -702,5 +760,230 @@ fn test_e2e_tpm_restart_persistence_and_unavailability() {
     assert!(
         res_inc.is_err(),
         "incrementing dead socket must fail closed"
+    );
+}
+
+#[test]
+fn test_e2e_authority_service_persistence_across_reconstruction() {
+    let _lock = E2E_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let swtpm = LiveSwtpm::new();
+    let prov_dir = tempfile::tempdir().unwrap();
+
+    let baseline_counter = {
+        let mut prov = TpmProvisioningManager::new(swtpm.connect_client(), prov_dir.path());
+        prov.execute(false, false, None)
+            .expect("fresh provisioning")
+    };
+    assert_eq!(baseline_counter, 1);
+
+    let tpm_client = swtpm.connect_client();
+    let tpm_counter = Arc::new(Mutex::new(TpmMonotonicCounter::new(
+        tpm_client,
+        TpmCounterConfig::default(),
+    )));
+
+    let machine_id = MachineId::new();
+    let secret = SharedSecret::from_bytes([0x77u8; 32]);
+    let lifecycle_id = LifecycleId::from_bytes([0xBBu8; 32]);
+    let mut srk_name_bytes = [0u8; 34];
+    srk_name_bytes[0..2].copy_from_slice(&0x000Bu16.to_be_bytes());
+    let name_srk = SrkName::from_bytes(srk_name_bytes);
+
+    let creds = AgentCredentials {
+        machine_id,
+        shared_secret: secret,
+        ek_pub: VALID_RSA_SPKI.to_vec(),
+        name_srk,
+        lifecycle_id,
+        generation: EnrollmentGeneration::from_u32(1),
+    };
+    let agent = AgentAttestationClient::new(creds, tpm_counter);
+
+    let auth_dir = tempfile::tempdir().expect("auth dir");
+    let auth_db_path = auth_dir.path().join("authority.db");
+    let replay_dir = tempfile::tempdir().expect("replay dir");
+    let replay_db_path = replay_dir.path().join("replay.db");
+    let catalog_dir = tempfile::tempdir().expect("catalog dir");
+
+    let now = TimestampNs::from_nanos(1_700_000_000_000_000_000);
+
+    // 1. Initial run: setup authority, issue token, and complete enrollment
+    let token_id = {
+        let auth_store = Arc::new(SqliteAuthorityStore::open(&auth_db_path).unwrap());
+        let replay_store = Arc::new(SqliteReplayStore::open(&replay_db_path).unwrap());
+        let catalog_mgr = Arc::new(CatalogManager::open(catalog_dir.path()).unwrap());
+        let base_catalog =
+            AssessmentCatalog::new(1, 1, serde_json::json!({"baseline": "v1.0"})).unwrap();
+        catalog_mgr.initialize_new(&base_catalog).unwrap();
+
+        let authority = AuthorityService::new(auth_store, replay_store, catalog_mgr);
+
+        let nonce = ChallengeNonce::from_bytes([0x99u8; 32]);
+        let token = authority
+            .issue_enrollment_token(machine_id, nonce, agent.generation(), 300_000_000_000, now)
+            .unwrap();
+
+        let (transcript, proof) = agent
+            .construct_enrollment_transcript(
+                nonce,
+                token.token_id,
+                TransactionId::new(),
+                CatalogVersion::from_u64(1),
+                now,
+                TimestampNs::from_nanos(now.as_nanos() + 300_000_000_000),
+            )
+            .unwrap();
+
+        let registration = authority
+            .process_enrollment(&transcript, &proof, agent.shared_secret(), now)
+            .unwrap();
+        assert_eq!(registration.machine_id, machine_id);
+
+        token.token_id
+    };
+
+    // 2. Tear down authority completely, reopen from disk, and assert persistence
+    {
+        let auth_store = Arc::new(SqliteAuthorityStore::open(&auth_db_path).unwrap());
+        let replay_store = Arc::new(SqliteReplayStore::open(&replay_db_path).unwrap());
+        let catalog_mgr = Arc::new(CatalogManager::open(catalog_dir.path()).unwrap());
+        let restored_authority = AuthorityService::new(auth_store, replay_store, catalog_mgr);
+
+        // Machine registration persists across authority restart!
+        let registered = restored_authority
+            .get_registered_machine(&machine_id)
+            .unwrap()
+            .expect("registered machine must survive authority process reconstruction");
+        assert_eq!(registered.machine_id, machine_id);
+        assert_eq!(registered.token_id, token_id);
+
+        // Consumed token state persists across authority restart!
+        let token_persisted = restored_authority
+            .authority_store()
+            .get_token(&token_id)
+            .unwrap()
+            .expect("token must survive authority process reconstruction");
+        assert!(
+            token_persisted.consumed,
+            "token consumed state must persist across reconstruction"
+        );
+
+        // Outbox retrieval works against restored authority!
+        let req_time = TimestampNs::from_nanos(now.as_nanos() + 10_000_000_000);
+        let req = agent.construct_retrieval_request(TransactionId::new(), req_time);
+        let verified_retrieval = restored_authority
+            .process_retrieval(&req, agent.shared_secret(), req_time)
+            .unwrap();
+        assert_eq!(verified_retrieval.message.machine_id, machine_id);
+
+        // Replay rejection persists across restart!
+        let replay_res =
+            restored_authority.process_retrieval(&req, agent.shared_secret(), req_time);
+        assert!(matches!(
+            replay_res,
+            Err(ProtocolError::ReplayDetected { .. })
+        ));
+    }
+}
+
+#[test]
+fn test_e2e_duplicate_machine_registration_failure_rolls_back_token_consumption() {
+    let _lock = E2E_TEST_MUTEX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let swtpm = LiveSwtpm::new();
+    let prov_dir = tempfile::tempdir().unwrap();
+
+    let baseline_counter = {
+        let mut prov = TpmProvisioningManager::new(swtpm.connect_client(), prov_dir.path());
+        prov.execute(false, false, None)
+            .expect("fresh provisioning")
+    };
+    assert_eq!(baseline_counter, 1);
+
+    let tpm_client = swtpm.connect_client();
+    let tpm_counter = Arc::new(Mutex::new(TpmMonotonicCounter::new(
+        tpm_client,
+        TpmCounterConfig::default(),
+    )));
+
+    let machine_id = MachineId::new();
+    let secret = SharedSecret::from_bytes([0x88u8; 32]);
+    let lifecycle_id = LifecycleId::from_bytes([0xCCu8; 32]);
+    let mut srk_name_bytes = [0u8; 34];
+    srk_name_bytes[0..2].copy_from_slice(&0x000Bu16.to_be_bytes());
+    let name_srk = SrkName::from_bytes(srk_name_bytes);
+
+    let creds = AgentCredentials {
+        machine_id,
+        shared_secret: secret,
+        ek_pub: VALID_RSA_SPKI.to_vec(),
+        name_srk,
+        lifecycle_id,
+        generation: EnrollmentGeneration::from_u32(1),
+    };
+    let agent = AgentAttestationClient::new(creds, tpm_counter);
+
+    let (authority, _auth_dir, _replay_dir, _cat_dir) = setup_authority_and_storage();
+    let now = TimestampNs::from_nanos(1_700_000_000_000_000_000);
+
+    // 1. Initial valid enrollment consumes token 1 and registers machine_id
+    let nonce1 = ChallengeNonce::from_bytes([0x11u8; 32]);
+    let token1 = authority
+        .issue_enrollment_token(machine_id, nonce1, agent.generation(), 300_000_000_000, now)
+        .unwrap();
+
+    let (transcript1, proof1) = agent
+        .construct_enrollment_transcript(
+            nonce1,
+            token1.token_id,
+            TransactionId::new(),
+            CatalogVersion::from_u64(1),
+            now,
+            TimestampNs::from_nanos(now.as_nanos() + 300_000_000_000),
+        )
+        .unwrap();
+
+    let reg1 = authority
+        .process_enrollment(&transcript1, &proof1, agent.shared_secret(), now)
+        .unwrap();
+    assert_eq!(reg1.machine_id, machine_id);
+
+    // 2. Issue a second valid token for the SAME machine_id
+    let nonce2 = ChallengeNonce::from_bytes([0x22u8; 32]);
+    let token2 = authority
+        .issue_enrollment_token(machine_id, nonce2, agent.generation(), 300_000_000_000, now)
+        .unwrap();
+
+    let (transcript2, proof2) = agent
+        .construct_enrollment_transcript(
+            nonce2,
+            token2.token_id,
+            TransactionId::new(),
+            CatalogVersion::from_u64(1),
+            now,
+            TimestampNs::from_nanos(now.as_nanos() + 300_000_000_000),
+        )
+        .unwrap();
+
+    // 3. Attempting to enroll again with token2 MUST fail due to duplicate machine identity constraint
+    let err_duplicate =
+        authority.process_enrollment(&transcript2, &proof2, agent.shared_secret(), now);
+    assert!(
+        matches!(err_duplicate, Err(ProtocolError::StorageUnavailable(msg)) if msg.contains("machine registration insert failed")),
+        "duplicate machine registration must fail closed on primary key constraint"
+    );
+
+    // 4. ATOMIC ROLLBACK CHECK: token2 MUST REMAIN UNCONSUMED in SQLite!
+    let token2_in_db = authority
+        .authority_store()
+        .get_token(&token2.token_id)
+        .unwrap()
+        .expect("token2 must exist");
+    assert!(
+        !token2_in_db.consumed,
+        "failed registration insert MUST roll back token consumption, leaving token2 unconsumed!"
     );
 }
