@@ -16,8 +16,19 @@ workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_json_canonicalizer = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 sha2 = { workspace = true }
+hmac = { workspace = true }
+spki = { workspace = true }
+der = { workspace = true }
+rsa = { workspace = true }
+p256 = { workspace = true }
 regex = { workspace = true }
+rusqlite = { workspace = true }
+rustix = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

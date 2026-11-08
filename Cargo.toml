@@ -32,8 +32,17 @@ openaudit-core = { path = "crates/core" }
 openaudit-engine = { path = "crates/engine" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_json_canonicalizer = "0.3.2"
 thiserror = "2.0"
 uuid = { version = "1.13", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = ["serde", "clock"] }
 sha2 = "0.10"
+hmac = "0.12"
+spki = "0.7"
+der = "0.7"
+rsa = { version = "0.9", default-features = false, features = ["std"] }
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "std"] }
 regex = "1.11"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tempfile = "3.17"
+rustix = { version = "1.1", features = ["fs"] }
