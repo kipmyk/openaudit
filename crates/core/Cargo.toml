@@ -29,6 +29,10 @@ p256 = { workspace = true }
 regex = { workspace = true }
 rusqlite = { workspace = true }
 rustix = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rustls-pemfile = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+rcgen = { workspace = true }

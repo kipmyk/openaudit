@@ -17,3 +17,6 @@ workspace = true
 openaudit-core = { workspace = true }
 openaudit-engine = { workspace = true }
 serde_json = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+rustls-pemfile = { workspace = true }
