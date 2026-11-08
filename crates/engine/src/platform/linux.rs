@@ -218,7 +218,10 @@ impl<FS: FileSystem + Send + Sync, CR: CommandRunner + Send + Sync> PlatformBack
                 // Ubuntu 24.04 LTS is officially supported and verified in CI container
                 self.info.version.major == 24
             }
-            // Debian 12/13 validation is scheduled for Milestone M3.2
+            PlatformDistribution::Debian => {
+                // Debian 12 (Bookworm) and Debian 13 (Trixie) are officially supported
+                self.info.version.major == 12 || self.info.version.major == 13
+            }
             _ => false,
         }
     }
@@ -339,8 +342,8 @@ mod tests {
         let backend12 = LinuxPlatformBackend::detect(&fs_deb12, &MockRunner).expect("detect");
         assert_eq!(backend12.info().distribution, PlatformDistribution::Debian);
         assert_eq!(backend12.info().version.major, 12);
-        // Debian support is scheduled for Milestone M3.2 following dedicated validation
-        assert!(!backend12.is_supported());
+        // Debian 12 (Bookworm) is an officially validated M3.2 target
+        assert!(backend12.is_supported());
 
         let fs_deb13 = MockFs {
             os_release: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13 (trixie)\"\nVERSION_CODENAME=trixie\n".into(),
@@ -351,8 +354,19 @@ mod tests {
         let backend13 = LinuxPlatformBackend::detect(&fs_deb13, &MockRunner).expect("detect");
         assert_eq!(backend13.info().distribution, PlatformDistribution::Debian);
         assert_eq!(backend13.info().version.major, 13);
-        // Debian support is scheduled for Milestone M3.2 following dedicated validation
-        assert!(!backend13.is_supported());
+        // Debian 13 (Trixie) is an officially validated M3.2 target
+        assert!(backend13.is_supported());
+
+        // Legacy/unvalidated Debian version must fail closed
+        let fs_deb11 = MockFs {
+            os_release: "ID=debian\nVERSION_ID=\"11\"\nPRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\nVERSION_CODENAME=bullseye\n".into(),
+            hostname: "debian-node-11\n".into(),
+            machine_id: "deb11-mid\n".into(),
+        };
+        let backend11 = LinuxPlatformBackend::detect(&fs_deb11, &MockRunner).expect("detect");
+        assert_eq!(backend11.info().distribution, PlatformDistribution::Debian);
+        assert_eq!(backend11.info().version.major, 11);
+        assert!(!backend11.is_supported());
     }
 
     #[test]
@@ -367,5 +381,31 @@ mod tests {
         assert_eq!(backend.info().distribution, PlatformDistribution::Arch);
         // Arch is not an officially supported M3 target distribution
         assert!(!backend.is_supported());
+
+        // Unvalidated Ubuntu release must fail closed
+        let fs_ub22 = MockFs {
+            os_release: "ID=ubuntu\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04 LTS\"\nVERSION_CODENAME=jammy\n".into(),
+            hostname: "ubuntu-22\n".into(),
+            machine_id: "ub22-mid\n".into(),
+        };
+        let backend_ub22 = LinuxPlatformBackend::detect(&fs_ub22, &MockRunner).expect("detect");
+        assert_eq!(
+            backend_ub22.info().distribution,
+            PlatformDistribution::Ubuntu
+        );
+        assert!(!backend_ub22.is_supported());
+
+        // Unvalidated Ubuntu release must fail closed
+        let fs_ub22 = MockFs {
+            os_release: "ID=ubuntu\nVERSION_ID=\"22.04\"\nPRETTY_NAME=\"Ubuntu 22.04 LTS\"\nVERSION_CODENAME=jammy\n".into(),
+            hostname: "ubuntu-22\n".into(),
+            machine_id: "ub22-mid\n".into(),
+        };
+        let backend_ub22 = LinuxPlatformBackend::detect(&fs_ub22, &MockRunner).expect("detect");
+        assert_eq!(
+            backend_ub22.info().distribution,
+            PlatformDistribution::Ubuntu
+        );
+        assert!(!backend_ub22.is_supported());
     }
 }
