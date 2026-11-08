@@ -76,4 +76,8 @@ pub enum ProtocolError {
     /// TPM command, connection, or hardware security operation failed.
     #[error("TPM hardware security error (fail-closed): {0}")]
     TpmError(String),
+
+    /// TLS transport, handshake, certificate verification, or connection error.
+    #[error("TLS transport error (fail-closed): {0}")]
+    TlsError(String),
 }

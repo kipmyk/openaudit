@@ -12,6 +12,7 @@ pub mod catalog;
 pub mod crypto;
 pub mod error;
 pub mod replay;
+pub mod tls;
 pub mod tpm;
 pub mod traits;
 pub mod trust;
@@ -35,6 +36,12 @@ pub use crypto::{
 };
 pub use error::ProtocolError;
 pub use replay::{SqliteReplayStore, CURRENT_SCHEMA_VERSION};
+pub use tls::{
+    build_tls13_client_config, build_tls13_server_config, dispatch_authority_request,
+    load_certificates_from_file, load_private_key_from_file, parse_certificates_from_pem,
+    parse_private_key_from_pem, read_framed, write_framed, TlsClientTransport, TlsProtocolRequest,
+    TlsProtocolResponse, MAX_FRAMED_MESSAGE_BYTES,
+};
 pub use tpm::{
     resolve_tpm_device_path, DeviceTransport, NvPublicInfo, ProvisioningState, TpmClient,
     TpmCounterConfig, TpmMonotonicCounter, TpmProvisioningManager, TpmTransport,
