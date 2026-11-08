@@ -233,6 +233,7 @@ fn print_help() {
           authority catalog-init           Initialize a baseline catalog repository\n  \
           authority catalog-update         Execute 6-stage catalog promotion synchronized with TPM counter\n  \
           authority recover-catalog        Reconcile catalog consistency against TPM counter (CB-01..13)\n  \
+          authority serve-tls              Run an authoritative TLS 1.3 service endpoint\n  \
           version                          Print version information\n  \
           help                             Print this help message\n\n\
         Global Options:\n  \
@@ -674,6 +675,144 @@ fn run_authority_catalog_init(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
+fn run_authority_serve_tls(args: &[String]) -> Result<(), String> {
+    let data_dir = get_data_dir(args);
+    let mut bind_addr = "127.0.0.1:8443".to_string();
+    let mut cert_path: Option<PathBuf> = None;
+    let mut key_path: Option<PathBuf> = None;
+    let mut secret_path: Option<PathBuf> = None;
+    let mut once = false;
+    let mut max_requests: Option<usize> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bind" => {
+                i += 1;
+                if i < args.len() {
+                    bind_addr.clone_from(&args[i]);
+                }
+            }
+            "--cert" => {
+                i += 1;
+                if i < args.len() {
+                    cert_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--key" => {
+                i += 1;
+                if i < args.len() {
+                    key_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--secret-file" => {
+                i += 1;
+                if i < args.len() {
+                    secret_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            "--once" => {
+                once = true;
+            }
+            "--max-requests" => {
+                i += 1;
+                if i < args.len() {
+                    max_requests = args[i].parse::<usize>().ok();
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let c_path =
+        cert_path.ok_or_else(|| "missing mandatory argument: --cert <PATH>".to_string())?;
+    let k_path = key_path.ok_or_else(|| "missing mandatory argument: --key <PATH>".to_string())?;
+    let s_path = secret_path
+        .ok_or_else(|| "missing mandatory argument: --secret-file <PATH>".to_string())?;
+
+    let certs = openaudit_core::protocol::load_certificates_from_file(&c_path)
+        .map_err(|err| format!("failed to load server certificate: {err}"))?;
+    let key = openaudit_core::protocol::load_private_key_from_file(&k_path)
+        .map_err(|err| format!("failed to load server private key: {err}"))?;
+
+    let server_config = openaudit_core::protocol::build_tls13_server_config(certs, key)
+        .map_err(|err| format!("failed to build TLS 1.3 server config: {err}"))?;
+    let server_config = Arc::new(server_config);
+
+    let secret_bytes = read_strict_secret_file(&s_path)?;
+    let secret = SharedSecret(secret_bytes);
+
+    let listener = std::net::TcpListener::bind(&bind_addr)
+        .map_err(|err| format!("failed to bind TLS server to '{bind_addr}': {err}"))?;
+    let local_addr = listener
+        .local_addr()
+        .map_err(|err| format!("failed to get local address: {err}"))?;
+
+    println!("TLS_SERVER_LISTENING: {local_addr}");
+    println!("TLS_VERSION: TLSv1.3");
+
+    let limit = if once { Some(1) } else { max_requests };
+    let mut handled = 0;
+
+    let service = open_authority_service(&data_dir)
+        .map_err(|err| format!("failed to initialize authority service: {err}"))?;
+
+    for stream in listener.incoming() {
+        let stream = match stream {
+            Ok(s) => s,
+            Err(err) => {
+                eprintln!("failed to accept connection: {err}");
+                continue;
+            }
+        };
+
+        let conn = match rustls::ServerConnection::new(server_config.clone()) {
+            Ok(c) => c,
+            Err(err) => {
+                eprintln!("failed to create TLS connection: {err}");
+                continue;
+            }
+        };
+
+        let mut tls_stream = rustls::StreamOwned::new(conn, stream);
+
+        match openaudit_core::protocol::read_framed(
+            &mut tls_stream,
+            openaudit_core::protocol::MAX_FRAMED_MESSAGE_BYTES,
+        ) {
+            Ok(req_bytes) => {
+                let now = current_time_ns().unwrap_or_else(|_| TimestampNs::from_nanos(0));
+                let resp = openaudit_core::protocol::dispatch_authority_request(
+                    &req_bytes, &service, &secret, now,
+                )
+                .unwrap_or_else(|err| {
+                    openaudit_core::protocol::TlsProtocolResponse::Error {
+                        code: "INTERNAL_ERROR".to_string(),
+                        message: err.to_string(),
+                    }
+                });
+
+                let resp_bytes = serde_json::to_vec(&resp).unwrap_or_default();
+                let _ = openaudit_core::protocol::write_framed(&mut tls_stream, &resp_bytes);
+            }
+            Err(err) => {
+                eprintln!("TLS framing/handshake error: {err}");
+            }
+        }
+
+        handled += 1;
+        if let Some(max) = limit {
+            if handled >= max {
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Dispatches command line arguments to subcommands.
 ///
 /// # Errors
@@ -705,6 +844,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 "catalog-init" => run_authority_catalog_init(&args[3..]),
                 "catalog-update" => run_authority_catalog_update(&args[3..]),
                 "recover-catalog" => run_authority_recover_catalog(&args[3..]),
+                "serve-tls" => run_authority_serve_tls(&args[3..]),
                 other => Err(format!("unknown authority subcommand: '{other}'")),
             }
         }
