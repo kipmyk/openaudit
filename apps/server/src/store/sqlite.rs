@@ -194,6 +194,7 @@ impl SqliteControlPlaneStore {
                 agent_version TEXT NOT NULL,
                 status TEXT NOT NULL,
                 auth_token_hash TEXT NOT NULL,
+                previous_auth_token_hash TEXT,
                 public_identity TEXT NOT NULL,
                 capabilities TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL,
@@ -207,6 +208,7 @@ impl SqliteControlPlaneStore {
 
             CREATE INDEX IF NOT EXISTS idx_agents_org_status ON enrolled_agents(org_id, status);
             CREATE INDEX IF NOT EXISTS idx_agents_auth_hash ON enrolled_agents(auth_token_hash);
+            CREATE INDEX IF NOT EXISTS idx_agents_prev_auth_hash ON enrolled_agents(previous_auth_token_hash);
             CREATE INDEX IF NOT EXISTS idx_agent_tokens_lookup ON agent_enrollment_tokens(id, expires_at);
             ",
         )
@@ -224,6 +226,10 @@ impl SqliteControlPlaneStore {
         let _ = conn.execute("ALTER TABLE assessment_jobs ADD COLUMN execution_source TEXT NOT NULL DEFAULT 'server'", []);
         let _ = conn.execute(
             "ALTER TABLE assessment_jobs ADD COLUMN rules_subset TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE enrolled_agents ADD COLUMN previous_auth_token_hash TEXT",
             [],
         );
 
@@ -1985,7 +1991,10 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, revoked_at, created_at, updated_at
-                 FROM enrolled_agents WHERE auth_token_hash = ?1",
+                 FROM enrolled_agents
+                 WHERE auth_token_hash = ?1 OR previous_auth_token_hash = ?1
+                 ORDER BY CASE WHEN auth_token_hash = ?1 THEN 0 ELSE 1 END
+                 LIMIT 1",
             )
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
@@ -2177,6 +2186,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         conn.execute(
             "UPDATE enrolled_agents
              SET last_seen_at = ?1,
+                 previous_auth_token_hash = NULL,
                  updated_at = ?1
              WHERE id = ?2",
             params![now_str, agent_id.to_string()],
@@ -2200,7 +2210,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         let rows = conn
             .execute(
                 "UPDATE enrolled_agents
-                 SET auth_token_hash = ?1,
+                 SET previous_auth_token_hash = auth_token_hash,
+                     auth_token_hash = ?1,
                      updated_at = ?2
                  WHERE id = ?3 AND status = 'active'",
                 params![new_auth_hash, now_str, agent_id.to_string()],
@@ -2724,16 +2735,28 @@ mod tests {
             .rotate_agent_credential(agent.id, new_hash)
             .await
             .unwrap();
+        // During transition before heartbeat confirmation, previous key still resolves
         assert!(store
             .get_agent_by_auth_hash(auth_hash)
             .await
             .unwrap()
-            .is_none());
+            .is_some());
         assert!(store
             .get_agent_by_auth_hash(new_hash)
             .await
             .unwrap()
             .is_some());
+
+        // Heartbeat confirms new key and clears previous fallback
+        store
+            .update_agent_heartbeat(agent.id, Utc::now())
+            .await
+            .unwrap();
+        assert!(store
+            .get_agent_by_auth_hash(auth_hash)
+            .await
+            .unwrap()
+            .is_none());
 
         // 3. Job Claiming and Dispatch
         let job = store
@@ -2821,5 +2844,100 @@ mod tests {
             .unwrap();
         assert_eq!(revoked.status, AgentStatus::Revoked);
         assert!(revoked.revoked_at.is_some());
+
+        // 5. Test credential rotation fallback and transition invalidation
+        let active_agent = store
+            .enroll_agent(
+                org.id,
+                "agent-rot-test",
+                "rot-host",
+                "1.0.0",
+                "hash_initial_key",
+                "pk_test",
+                "[]",
+            )
+            .await
+            .unwrap();
+
+        let old_hash = "hash_initial_key";
+        let new_hash = "hash_rotated_key";
+        store
+            .rotate_agent_credential(active_agent.id, new_hash)
+            .await
+            .unwrap();
+
+        // Old key resolves during transition window
+        let resolved_old = store.get_agent_by_auth_hash(old_hash).await.unwrap();
+        assert!(
+            resolved_old.is_some(),
+            "Previous key must resolve during transition"
+        );
+
+        // New key also resolves
+        let resolved_new = store.get_agent_by_auth_hash(new_hash).await.unwrap();
+        assert_eq!(resolved_new.unwrap().id, active_agent.id);
+
+        // Heartbeat with new key clears transitional key
+        store
+            .update_agent_heartbeat(active_agent.id, Utc::now())
+            .await
+            .unwrap();
+        let resolved_old_after_hb = store.get_agent_by_auth_hash(old_hash).await.unwrap();
+        assert!(
+            resolved_old_after_hb.is_none(),
+            "Previous key must be invalidated after heartbeat"
+        );
+
+        // 6. Test reclaimed job rejection for stale agents
+        let stale_job = store
+            .create_job(org.id, None, "10.0.0.99", "host_audit", "standard")
+            .await
+            .unwrap();
+        store
+            .claim_next_pending_job(active_agent.id, org.id, 60)
+            .await
+            .unwrap();
+
+        // Force lease expiration
+        let past = Utc::now() - chrono::Duration::seconds(10);
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE assessment_jobs SET lease_expires_at = ?1 WHERE id = ?2",
+                params![past.to_rfc3339(), stale_job.id.to_string()],
+            )
+            .unwrap();
+
+        // Second agent reclaims the expired job
+        let second_agent = store
+            .enroll_agent(
+                org.id,
+                "agent-02",
+                "host-02",
+                "1.0.0",
+                "hash_agent2",
+                "pk_agent2",
+                "[]",
+            )
+            .await
+            .unwrap();
+        let reclaimed = store
+            .claim_next_pending_job(second_agent.id, org.id, 60)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reclaimed.id, stale_job.id);
+        assert_eq!(reclaimed.assigned_agent_id, Some(second_agent.id));
+
+        // Stale active_agent attempts to submit results -> MUST be rejected with Unauthorized
+        let stale_submit = store
+            .complete_agent_job(active_agent.id, stale_job.id, org.id, None, &findings)
+            .await;
+        assert!(
+            matches!(stale_submit, Err(StoreError::Unauthorized(_))),
+            "Stale agent submission must be rejected when job is reclaimed"
+        );
     }
 }

@@ -1359,7 +1359,10 @@ impl ControlPlaneStore for PostgresControlPlaneStore {
         let row = client
             .query_opt(
                 "SELECT id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, revoked_at, created_at, updated_at
-                 FROM enrolled_agents WHERE auth_token_hash = $1",
+                 FROM enrolled_agents
+                 WHERE auth_token_hash = $1 OR previous_auth_token_hash = $1
+                 ORDER BY CASE WHEN auth_token_hash = $1 THEN 0 ELSE 1 END
+                 LIMIT 1",
                 &[&auth_token_hash],
             )
             .await
@@ -1474,6 +1477,7 @@ impl ControlPlaneStore for PostgresControlPlaneStore {
             .execute(
                 "UPDATE enrolled_agents
                  SET last_seen_at = $1,
+                     previous_auth_token_hash = NULL,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $2",
                 &[&last_seen_at, &agent_id],
@@ -1498,7 +1502,8 @@ impl ControlPlaneStore for PostgresControlPlaneStore {
         let rows = client
             .execute(
                 "UPDATE enrolled_agents
-                 SET auth_token_hash = $1,
+                 SET previous_auth_token_hash = auth_token_hash,
+                     auth_token_hash = $1,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE id = $2 AND status = 'active'",
                 &[&new_auth_hash, &agent_id],

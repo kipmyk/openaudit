@@ -347,4 +347,30 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
 
     let completed_pg_job = store.get_job(org1.id, pg_job.id).await.unwrap().unwrap();
     assert_eq!(completed_pg_job.status, JobStatus::Completed);
+
+    // Test PG Credential Rotation Fallback
+    let old_pg_hash = &agent.auth_token_hash;
+    let new_pg_hash = "pg-hash-rotated";
+    store
+        .rotate_agent_credential(agent.id, new_pg_hash)
+        .await
+        .expect("Rotate PG credential");
+
+    // Old hash still resolves during transition
+    let resolved_old = store.get_agent_by_auth_hash(old_pg_hash).await.unwrap();
+    assert!(
+        resolved_old.is_some(),
+        "Old credential should resolve in PG during transition"
+    );
+
+    // Heartbeat clears fallback
+    store
+        .update_agent_heartbeat(agent.id, Utc::now())
+        .await
+        .expect("Heartbeat clears fallback");
+    let resolved_old_after_hb = store.get_agent_by_auth_hash(old_pg_hash).await.unwrap();
+    assert!(
+        resolved_old_after_hb.is_none(),
+        "Old credential must be invalidated after heartbeat in PG"
+    );
 }

@@ -34,10 +34,12 @@ ALTER TABLE assessment_jobs ADD COLUMN IF NOT EXISTS assigned_agent_id UUID REFE
 ALTER TABLE assessment_jobs ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
 ALTER TABLE assessment_jobs ADD COLUMN IF NOT EXISTS execution_source VARCHAR(32) NOT NULL DEFAULT 'server';
 ALTER TABLE assessment_jobs ADD COLUMN IF NOT EXISTS rules_subset TEXT;
+ALTER TABLE enrolled_agents ADD COLUMN IF NOT EXISTS previous_auth_token_hash VARCHAR(255);
 
 -- Indexes for Agent Lookups and Job Dispatch
 CREATE INDEX IF NOT EXISTS idx_agent_tokens_lookup ON agent_enrollment_tokens(id, expires_at) WHERE used_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_agents_org_status ON enrolled_agents(org_id, status);
 CREATE INDEX IF NOT EXISTS idx_agents_auth_hash ON enrolled_agents(auth_token_hash);
+CREATE INDEX IF NOT EXISTS idx_agents_prev_auth_hash ON enrolled_agents(previous_auth_token_hash);
 CREATE INDEX IF NOT EXISTS idx_jobs_claimable ON assessment_jobs(status, lease_expires_at) WHERE status = 'pending' OR status = 'running';
 

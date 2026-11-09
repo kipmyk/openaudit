@@ -1,5 +1,6 @@
 //! Agent enrollment, management, and outbound communication endpoints (M6).
 
+use argon2::password_hash::rand_core::{OsRng, RngCore};
 use axum::extract::{Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -36,7 +37,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     res == 0
 }
 
-/// Hashes an agent authentication key using SHA-256.
+/// Hashes an agent authentication key or enrollment secret using SHA-256.
 #[must_use]
 pub fn hash_agent_key(key: &str) -> String {
     let mut hasher = Sha256::new();
@@ -44,12 +45,12 @@ pub fn hash_agent_key(key: &str) -> String {
     encode_hex(&hasher.finalize())
 }
 
-/// Generates a high-entropy random hex token (32 hex characters / 16 bytes).
+/// Generates a high-entropy cryptographically secure random hex token (64 hex characters / 32 bytes = 256 bits of entropy).
 #[must_use]
 pub fn generate_random_token() -> String {
-    let u1 = Uuid::new_v4();
-    let u2 = Uuid::new_v4();
-    format!("{}{}", encode_hex(u1.as_bytes()), encode_hex(u2.as_bytes()))
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    encode_hex(&bytes)
 }
 
 // =========================================================================
@@ -89,6 +90,7 @@ pub async fn create_enrollment_token_handler(
     }
 
     let token_secret = generate_random_token();
+    let token_secret_hash = hash_agent_key(&token_secret);
     let challenge_nonce = generate_random_token();
     let ttl_mins = payload.ttl_minutes.unwrap_or(30).clamp(1, 1440); // 1 min to 24 hrs
     let expires_at = Utc::now() + chrono::Duration::minutes(i64::from(ttl_mins));
@@ -102,7 +104,7 @@ pub async fn create_enrollment_token_handler(
         .store
         .issue_agent_enrollment_token(
             auth.org_id,
-            &token_secret,
+            &token_secret_hash,
             clean_machine.as_deref(),
             &challenge_nonce,
             expires_at,
@@ -303,9 +305,10 @@ pub async fn agent_enroll_handler(
             .into_response();
     }
 
-    // Constant-time verify secret
+    // Constant-time verify secret against stored SHA-256 hash
+    let presented_secret_hash = hash_agent_key(&payload.token_secret);
     if !constant_time_eq(
-        payload.token_secret.as_bytes(),
+        presented_secret_hash.as_bytes(),
         token.token_secret.as_bytes(),
     ) {
         return (
@@ -329,8 +332,12 @@ pub async fn agent_enroll_handler(
         }
     }
 
-    // Challenge response verification (must contain the challenge nonce)
-    if !payload.challenge_response.contains(&token.challenge_nonce) {
+    // Challenge response verification (constant-time verification of challenge nonce and machine_id)
+    let expected_challenge = format!("{}:{}", token.challenge_nonce, machine_id);
+    if !constant_time_eq(
+        payload.challenge_response.trim().as_bytes(),
+        expected_challenge.as_bytes(),
+    ) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "invalid_challenge_response", "message": "Challenge response verification failed" })),
@@ -435,12 +442,17 @@ async fn authenticate_agent(
             .into_response());
     };
 
-    if agent.status == AgentStatus::Revoked {
+    if agent.status != AgentStatus::Active {
+        let err_code = match agent.status {
+            AgentStatus::Revoked => "agent_revoked",
+            AgentStatus::Pending => "agent_pending_approval",
+            AgentStatus::Active => "agent_inactive",
+        };
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({
-                "error": "agent_revoked",
-                "message": "This agent enrollment has been revoked"
+                "error": err_code,
+                "message": format!("Agent is not active (status: {:?})", agent.status)
             })),
         )
             .into_response());
