@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/core",
     "crates/engine",
+    "crates/network",
     "apps/server",
     "apps/cli",
     "apps/agent",
@@ -31,6 +32,7 @@ nursery = "warn"
 [workspace.dependencies]
 openaudit-core = { path = "crates/core" }
 openaudit-engine = { path = "crates/engine" }
+openaudit-network = { path = "crates/network" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_json_canonicalizer = "0.3.2"
