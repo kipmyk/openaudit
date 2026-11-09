@@ -64,7 +64,9 @@ fn print_help() {
         "OpenAudit CLI v{}\n\n\
         Usage: openaudit-cli <COMMAND> [OPTIONS]\n\n\
         Commands:\n  \
-          scan                         Run a security audit against the local host\n  \
+          scan                         Run a security audit against the local host (Local Host Assessment)\n  \
+          scan remote <IP|HOST>        Agentless remote network assessment (Milestone 4 roadmap)\n  \
+          scan agent                   Enrolled server agent assessment (Milestone 6 roadmap)\n  \
           audit local                  Run local host audit (backward compatible with M2)\n  \
           system info                  Display detected platform metadata and capabilities\n  \
           rules list                   List available security audit rules\n  \
@@ -274,6 +276,7 @@ fn render_human_report(report: &AuditReport, min_severity: Severity) {
         openaudit_core::version()
     );
     println!("Host: {host_label} ({kernel} {arch})");
+    println!("Assessment Type: {}", report.assessment_type.display_name());
     println!("Execution Privilege: {:?}", report.current_privilege);
     println!();
 
@@ -450,6 +453,7 @@ fn main() -> ExitCode {
     let mut config = CliConfig::default();
     let mut i = 1;
     let mut command = String::new();
+    let mut remote_target: Option<String> = None;
 
     while i < args.len() {
         match args[i].as_str() {
@@ -462,9 +466,21 @@ fn main() -> ExitCode {
                 return exit_codes::SUCCESS;
             }
             "scan" => {
-                command = "scan".into();
                 if i + 1 < args.len() && args[i + 1] == "local" {
+                    command = "scan".into();
                     i += 1;
+                } else if i + 1 < args.len() && args[i + 1] == "remote" {
+                    command = "scan_remote".into();
+                    i += 1;
+                    if i + 1 < args.len() && !args[i + 1].starts_with('-') {
+                        remote_target = Some(args[i + 1].clone());
+                        i += 1;
+                    }
+                } else if i + 1 < args.len() && args[i + 1] == "agent" {
+                    command = "scan_agent".into();
+                    i += 1;
+                } else {
+                    command = "scan".into();
                 }
             }
             "audit" => {
@@ -586,6 +602,26 @@ fn main() -> ExitCode {
                 exit_codes::FAILURE
             }
         },
+        "scan_remote" => {
+            let target = remote_target.as_deref().unwrap_or("target-unspecified");
+            println!("OpenAudit Remote Network Assessment");
+            println!("Target: {target}");
+            println!("Assessment Type: Remote Network Assessment");
+            println!("Status: Scheduled for Milestone 4 (Network Perimeter Auditing)");
+            println!();
+            println!("Notice: Agentless network assessment against IP addresses and hostnames is part of the Milestone 4 roadmap (DNS, TLS, HTTP security headers, and SSRF defenses).");
+            println!("Important Boundary: An IP address alone cannot perform an operating system security audit. Internal users, packages, permissions, and kernel configurations require local host execution or securely enrolled OpenAudit agents (Milestones 5 & 6).");
+            exit_codes::SUCCESS
+        }
+        "scan_agent" => {
+            println!("OpenAudit Enrolled Server Agent Assessment");
+            println!("Assessment Type: Enrolled Agent Host Assessment");
+            println!("Status: Scheduled for Milestone 6 (Secure Agent Communication & Enrollment)");
+            println!();
+            println!("Notice: Centralized server management and securely attested agent communication are part of Milestones 5 and 6.");
+            println!("Requirements: Install openaudit-agent on target servers, enroll with the OpenAudit control plane using secure D4 attestation, and run audits via the shared Rust engine.");
+            exit_codes::SUCCESS
+        }
         "system_info" => match run_system_info(config.format) {
             Ok(code) => code,
             Err(err) => {
@@ -658,6 +694,7 @@ mod tests {
             check_statuses: Vec::new(),
             summary: openaudit_core::ScanSummary::default(),
             duration_ms: 42,
+            assessment_type: openaudit_core::AssessmentType::LocalHostAssessment,
         };
         let html = render_html_report(&report);
         assert!(html.contains("<!DOCTYPE html>"));
