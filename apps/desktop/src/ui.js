@@ -323,7 +323,12 @@ window.onRulesLoaded = function(rules) {
     const macRules = rules.filter(r => (r.target_platforms || []).includes('MacOS')).length;
     const linuxRules = rules.filter(r => (r.target_platforms || []).includes('Linux')).length;
     const winRules = rules.filter(r => (r.target_platforms || []).includes('Windows')).length;
-    countEl.textContent = `${macRules} macOS Native Controls (Active) \u2022 ${linuxRules} Linux Server Rules \u2022 ${winRules} Windows Server Rules (${rules.length} Total)`;
+    countEl.innerHTML = `
+      <span class="tech-pill" style="color: var(--accent-green); background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.2); font-weight: 600;">${macRules} macOS Controls (Active on this Mac)</span>
+      <span class="tech-pill" style="color: var(--text-muted);">${linuxRules} Linux Server Rules</span>
+      <span class="tech-pill" style="color: var(--text-muted);">${winRules} Windows Server Rules</span>
+      <span style="font-size: 11px; color: var(--text-faint); margin-left: 4px;">(${rules.length} Total Isolated Rules)</span>
+    `;
   }
 };
 
@@ -578,20 +583,20 @@ function renderRulesTable(rules) {
   // Update scope banner metadata per platform
   if (scopeTitle && scopeDesc) {
     if (currentPlatformFilter === 'MacOS') {
-      scopeTitle.textContent = 'macOS Native Security Controls (Active on this Host)';
-      scopeDesc.textContent = '11 native host posture checks evaluated directly via Apple Silicon telemetry (SIP, FileVault, Gatekeeper, Firewall, LaunchDaemons).';
+      scopeTitle.textContent = 'macOS Native Security Controls (11 Rules \u2022 Active Host Posture)';
+      scopeDesc.textContent = 'Evaluated locally against this macOS workstation via direct in-process telemetry (SIP, FileVault, Gatekeeper, Application Firewall, LaunchDaemons, TCC).';
       if (scopeBanner) scopeBanner.className = 'weight-row boost';
     } else if (currentPlatformFilter === 'Linux') {
-      scopeTitle.textContent = 'Linux Server Security Controls (Clean Isolation)';
-      scopeDesc.textContent = '20 native rules evaluating SSH daemon hardening, sudoers, world-writable sysctl, and user boundaries (Executed via openaudit-cli on Linux servers or remote agent).';
+      scopeTitle.textContent = 'Linux Server Hardening Controls (20 Rules \u2022 Dedicated Server Scope)';
+      scopeDesc.textContent = 'Evaluated on Linux enterprise servers via headless openaudit-cli or enrolled agent (SSH daemon hardening, root privilege boundaries, sudoers, sysctl).';
       if (scopeBanner) scopeBanner.className = 'weight-row';
     } else if (currentPlatformFilter === 'Windows') {
-      scopeTitle.textContent = 'Windows Server Security Controls (Clean Isolation)';
-      scopeDesc.textContent = '12 native rules evaluating Windows Defender, Advanced Firewall, LSA Protection, and Registry hardening (Executed via openaudit-cli on Windows or remote agent).';
+      scopeTitle.textContent = 'Windows Server Hardening Controls (12 Rules \u2022 Dedicated Server Scope)';
+      scopeDesc.textContent = 'Evaluated on Windows enterprise servers via headless openaudit-cli or enrolled agent (Microsoft Defender, Windows Firewall, LSA Protection, Registry hardening).';
       if (scopeBanner) scopeBanner.className = 'weight-row';
     } else {
-      scopeTitle.textContent = 'Complete Built-in Security Rule Registry (All Platforms)';
-      scopeDesc.textContent = '43 total security rules strictly scoped across macOS host (11), Linux servers (20), and Windows servers (12). Rules never cross platform boundaries.';
+      scopeTitle.textContent = 'Built-in Security Rule Registry (43 Rules Partitioned by OS)';
+      scopeDesc.textContent = 'Strictly partitioned by operating system: 11 macOS host rules, 20 Linux server rules, and 12 Windows server rules. Rules are isolated and never run on incompatible platforms.';
       if (scopeBanner) scopeBanner.className = 'weight-row';
     }
   }
@@ -605,7 +610,7 @@ function renderRulesTable(rules) {
     return;
   }
 
-  tbody.innerHTML = filtered.map(r => {
+  const renderRuleRow = (r) => {
     const plats = r.target_platforms || r.platforms || [];
     const isMac = plats.includes('MacOS');
     const isLinux = plats.includes('Linux');
@@ -613,11 +618,11 @@ function renderRulesTable(rules) {
 
     let platBadge = '';
     if (isMac) {
-      platBadge = '<span class="badge badge-pass">macOS &bull; Active</span>';
+      platBadge = '<span class="badge badge-pass">macOS Native &bull; Active</span>';
     } else if (isLinux) {
-      platBadge = '<span class="badge badge-low">Linux Server</span>';
+      platBadge = '<span class="badge badge-low">Linux Server &bull; Remote/CLI</span>';
     } else if (isWin) {
-      platBadge = '<span class="badge badge-med">Windows Server</span>';
+      platBadge = '<span class="badge badge-med">Windows Server &bull; Remote/CLI</span>';
     } else {
       platBadge = `<span class="badge badge-neutral">${plats.join(', ')}</span>`;
     }
@@ -634,7 +639,31 @@ function renderRulesTable(rules) {
         <td>${platBadge}</td>
       </tr>
     `;
-  }).join('');
+  };
+
+  if (currentPlatformFilter === 'all') {
+    // Partition rules by OS platform with clear section headers
+    const macRules = filtered.filter(r => (r.target_platforms || []).includes('MacOS'));
+    const linuxRules = filtered.filter(r => (r.target_platforms || []).includes('Linux'));
+    const winRules = filtered.filter(r => (r.target_platforms || []).includes('Windows'));
+
+    let html = '';
+    if (macRules.length > 0) {
+      html += `<tr style="background: var(--bg-subtle);"><td colspan="6" style="padding: 10px 14px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-green); border-bottom: 1px solid var(--border-light);"><span class="badge badge-pass" style="margin-right: 8px;">macOS Native Scope</span> 11 Active Host Controls (Evaluated on this Workstation)</td></tr>`;
+      html += macRules.map(renderRuleRow).join('');
+    }
+    if (linuxRules.length > 0) {
+      html += `<tr style="background: var(--bg-subtle);"><td colspan="6" style="padding: 10px 14px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-blue); border-bottom: 1px solid var(--border-light);"><span class="badge badge-low" style="margin-right: 8px;">Linux Server Scope</span> 20 Server Hardening Rules (Evaluated via Headless CLI / Remote Agent)</td></tr>`;
+      html += linuxRules.map(renderRuleRow).join('');
+    }
+    if (winRules.length > 0) {
+      html += `<tr style="background: var(--bg-subtle);"><td colspan="6" style="padding: 10px 14px; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-amber); border-bottom: 1px solid var(--border-light);"><span class="badge badge-med" style="margin-right: 8px;">Windows Server Scope</span> 12 Server Hardening Rules (Evaluated via Headless CLI / Remote Agent)</td></tr>`;
+      html += winRules.map(renderRuleRow).join('');
+    }
+    tbody.innerHTML = html;
+  } else {
+    tbody.innerHTML = filtered.map(renderRuleRow).join('');
+  }
 }
 
 function onSearchRules() {
@@ -723,6 +752,11 @@ document.addEventListener('keydown', (e) => {
     else if (e.key === '6') { e.preventDefault(); showTab('report'); }
     else if (e.key === '7') { e.preventDefault(); showTab('settings'); }
     else if (e.key.toLowerCase() === 'r') { e.preventDefault(); runAudit(); }
+  } else if (e.altKey) {
+    if (e.key === '1') { e.preventDefault(); filterRulesPlatform('MacOS'); }
+    else if (e.key === '2') { e.preventDefault(); filterRulesPlatform('Linux'); }
+    else if (e.key === '3') { e.preventDefault(); filterRulesPlatform('Windows'); }
+    else if (e.key === '4') { e.preventDefault(); filterRulesPlatform('all'); }
   }
 });
 

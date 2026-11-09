@@ -172,35 +172,35 @@
         </div>
       </div>
 
-      <!-- Enterprise KPI Stat Tiles (Linear/Stripe standard) -->
-      <div class="kpi-grid">
-        <div class="kpi-card">
-          <span class="kpi-label">TOTAL FINDINGS</span>
-          <span id="kpi-total" class="kpi-stat-text">0</span>
-          <span class="kpi-caption">Host policy checks evaluated</span>
-        </div>
-
-        <div class="kpi-card">
-          <span class="kpi-label">CRITICAL &amp; HIGH</span>
-          <span id="kpi-crit-high" class="kpi-stat-text green">0</span>
-          <span class="kpi-caption">Severe security violations</span>
-        </div>
-
-        <div class="kpi-card">
-          <span class="kpi-label">EXECUTION PRIVILEGE</span>
-          <span id="kpi-privilege" class="kpi-stat-text" style="font-size: 16px; margin-top: 4px;">Unprivileged</span>
-          <span class="kpi-caption">Current macOS process token</span>
-        </div>
-
-        <div class="kpi-card">
-          <span class="kpi-label">SCAN DURATION</span>
-          <span id="kpi-duration" class="kpi-stat-text">--</span>
-          <span class="kpi-caption">In-process Rust engine execution</span>
-        </div>
-      </div>
-
       <!-- Tab 1: Overview (Local Machine) -->
       <div id="tab-overview" class="tab-pane">
+        <!-- Enterprise KPI Stat Tiles (Host Security Overview) -->
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <span class="kpi-label">TOTAL FINDINGS</span>
+            <span id="kpi-total" class="kpi-stat-text">0</span>
+            <span class="kpi-caption">Host policy checks evaluated</span>
+          </div>
+
+          <div class="kpi-card">
+            <span class="kpi-label">CRITICAL &amp; HIGH</span>
+            <span id="kpi-crit-high" class="kpi-stat-text green">0</span>
+            <span class="kpi-caption">Severe security violations</span>
+          </div>
+
+          <div class="kpi-card">
+            <span class="kpi-label">EXECUTION PRIVILEGE</span>
+            <span id="kpi-privilege" class="kpi-stat-text" style="font-size: 16px; margin-top: 4px;">Unprivileged</span>
+            <span class="kpi-caption">Current macOS process token</span>
+          </div>
+
+          <div class="kpi-card">
+            <span class="kpi-label">SCAN DURATION</span>
+            <span id="kpi-duration" class="kpi-stat-text">--</span>
+            <span class="kpi-caption">In-process Rust engine execution</span>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-header">
             <span class="card-title">Host Inspection Diagnostics</span>
@@ -229,7 +229,11 @@
             </div>
             <div>
               <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Registered Security Rules</div>
-              <div id="diag-rules-count">11 macOS Native Controls (Active) &bull; 20 Linux Server Rules &bull; 12 Windows Server Rules</div>
+              <div id="diag-rules-count" style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 4px;">
+                <span class="tech-pill" style="color: var(--accent-green); background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.2); font-weight: 600;">11 macOS Host Controls (Active)</span>
+                <span class="tech-pill" style="color: var(--text-muted);">20 Linux Server Rules</span>
+                <span class="tech-pill" style="color: var(--text-muted);">12 Windows Server Rules</span>
+              </div>
             </div>
           </div>
         </div>
@@ -466,17 +470,25 @@
         </div>
       </div>
 
-      <!-- Tab 3: Rule Catalog -->
+      <!-- Tab 3: Rule Catalog (Clean OS Platform Isolation) -->
       <div id="tab-rules" class="tab-pane" style="display: none;">
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
           <div class="segmented-group">
-            <button class="segmented-btn rule-plat-btn active" data-platform="MacOS" onclick="filterRulesPlatform('MacOS')">macOS Native (11 Active)</button>
-            <button class="segmented-btn rule-plat-btn" data-platform="Linux" onclick="filterRulesPlatform('Linux')">Linux Server (20)</button>
-            <button class="segmented-btn rule-plat-btn" data-platform="Windows" onclick="filterRulesPlatform('Windows')">Windows Server (12)</button>
-            <button class="segmented-btn rule-plat-btn" data-platform="all" onclick="filterRulesPlatform('all')">All Platforms (43)</button>
+            <button class="segmented-btn rule-plat-btn active" data-platform="MacOS" onclick="filterRulesPlatform('MacOS')">
+              macOS Controls (11 Active)
+            </button>
+            <button class="segmented-btn rule-plat-btn" data-platform="Linux" onclick="filterRulesPlatform('Linux')">
+              Linux Server Rules (20)
+            </button>
+            <button class="segmented-btn rule-plat-btn" data-platform="Windows" onclick="filterRulesPlatform('Windows')">
+              Windows Server Rules (12)
+            </button>
+            <button class="segmented-btn rule-plat-btn" data-platform="all" onclick="filterRulesPlatform('all')">
+              All Platforms (Partitioned by OS)
+            </button>
           </div>
 
-          <input type="text" id="rules-search" class="input search-box" placeholder="Search rules..." oninput="onSearchRules()">
+          <input type="text" id="rules-search" class="input search-box" placeholder="Search rules in selected scope..." oninput="onSearchRules()">
         </div>
 
         <div id="platform-scope-banner" class="weight-row boost" style="margin-bottom: 12px; cursor: default;">
@@ -499,7 +511,7 @@
                 <th style="width: 80px;">Severity</th>
                 <th style="width: 110px;">Privilege</th>
                 <th style="width: 80px;">Profile</th>
-                <th style="width: 150px;">OS Target &amp; Status</th>
+                <th style="width: 170px;">Target OS &amp; Execution Scope</th>
               </tr>
             </thead>
             <tbody id="rules-tbody">
@@ -508,7 +520,7 @@
           </table>
           <div style="padding: 10px 14px; background: var(--bg-subtle); border-top: 1px solid var(--border-light); font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between;">
             <span id="rules-count-label">Showing 11 rules</span>
-            <span>Shared Rust Engine &bull; Zero Simulation</span>
+            <span>Platform Isolated &bull; Zero Rule Leakage</span>
           </div>
         </div>
       </div>
