@@ -976,7 +976,12 @@ impl HttpPostureAssessor {
                 }
 
                 // Check SameSite=None without Secure
-                if cookie.same_site.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("none")) && !cookie.has_secure {
+                if cookie
+                    .same_site
+                    .as_deref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case("none"))
+                    && !cookie.has_secure
+                {
                     findings.push(HttpFinding {
                         id: "http.cookie.samesite-none-insecure".into(),
                         severity: HttpFindingSeverity::High,

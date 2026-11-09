@@ -14,6 +14,8 @@ readme.workspace = true
 workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 openaudit-core = { workspace = true }
 openaudit-engine = { workspace = true }
+openaudit-network = { workspace = true }
 serde_json = { workspace = true }
