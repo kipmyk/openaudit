@@ -340,11 +340,33 @@ fn render_human_report(report: &AuditReport, min_severity: Severity) {
             })
             .count();
 
+        let profile_excluded_count = report
+            .check_statuses
+            .iter()
+            .filter(|s| matches!(s.status, CheckExecutionStatus::NotApplicable { .. }))
+            .count();
+
+        let executed_count = report
+            .check_statuses
+            .iter()
+            .filter(|s| matches!(s.status, CheckExecutionStatus::Executed { .. }))
+            .count();
+
+        let total_checks = report.check_statuses.len();
+
         if unsupported_count > 0 {
             println!(
-                "Note: {unsupported_count} checks were skipped due to platform/distribution boundaries."
+                "Note: {unsupported_count} checks were skipped due to platform boundaries."
             );
         }
+        if profile_excluded_count > 0 {
+            println!(
+                "Note: {profile_excluded_count} checks were excluded by current audit profile (evaluate with --profile hardened)."
+            );
+        }
+        println!(
+            "Evaluated: {executed_count} active controls ({total_checks} total registered across all platforms)."
+        );
     }
 
     println!("--------------------------------------------------------------------------------");

@@ -169,24 +169,24 @@ impl<FS: FileSystem + Clone + 'static, CR: CommandRunner + Clone + 'static> Audi
         for rule in &self.rules {
             let rule_id = rule.id();
 
-            // Profile filtering: if baseline profile, skip hardened-only rules
-            if profile == AuditProfile::Baseline && rule.profile() == AuditProfile::Hardened {
-                check_statuses.push(CheckStatusRecord {
-                    rule_id: rule_id.to_string(),
-                    status: CheckExecutionStatus::NotApplicable {
-                        reason: "Excluded by baseline audit profile".to_string(),
-                    },
-                });
-                continue;
-            }
-
-            // Platform applicability check
+            // 1. Platform applicability check: rules for other OS platforms are unsupported
             if !rule.target_platforms().contains(&platform_info.family) {
                 check_statuses.push(CheckStatusRecord {
                     rule_id: rule_id.to_string(),
                     status: CheckExecutionStatus::UnsupportedPlatform {
                         platform: platform_info.family,
                         reason: format!("Rule only applies to: {:?}", rule.target_platforms()),
+                    },
+                });
+                continue;
+            }
+
+            // 2. Profile filtering: if baseline profile, skip hardened-only rules for this platform
+            if profile == AuditProfile::Baseline && rule.profile() == AuditProfile::Hardened {
+                check_statuses.push(CheckStatusRecord {
+                    rule_id: rule_id.to_string(),
+                    status: CheckExecutionStatus::NotApplicable {
+                        reason: "Excluded by baseline audit profile".to_string(),
                     },
                 });
                 continue;

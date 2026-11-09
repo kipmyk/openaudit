@@ -153,3 +153,84 @@ fn test_server_auditing_rule_coverage_and_invariants() {
         .count();
     assert!(macos_rule_count >= 11, "Must contain macOS rules");
 }
+
+/// Regression test proving that rule totals and platform execution counts are 100% consistent:
+/// - 43 total registered rules (20 Linux, 12 Windows, 11 macOS).
+/// - On macOS: exactly 32 rules are marked UnsupportedPlatform (20 Linux + 12 Windows).
+/// - On macOS Baseline: 9 executed + 2 profile-excluded + 32 unsupported = 43 total.
+/// - On macOS Hardened: 11 executed + 0 profile-excluded + 32 unsupported = 43 total.
+#[test]
+fn test_audit_rule_accounting_exact_counts_and_invariants() {
+    use openaudit_engine::CheckExecutionStatus;
+
+    let org_id = OrganizationId::from_seed(b"openaudit:rule-accounting:test-org");
+    let engine = AuditEngine::default();
+    assert_eq!(engine.rules().len(), 43, "Engine must register exactly 43 rules");
+
+    // 1. Baseline profile evaluation
+    let baseline_report = engine
+        .run_audit_with_profile(org_id, AuditProfile::Baseline)
+        .expect("Baseline audit must succeed");
+
+    assert_eq!(baseline_report.check_statuses.len(), 43);
+
+    let baseline_unsupported = baseline_report
+        .check_statuses
+        .iter()
+        .filter(|s| matches!(s.status, CheckExecutionStatus::UnsupportedPlatform { .. }))
+        .count();
+    assert_eq!(
+        baseline_unsupported, 32,
+        "All 20 Linux and 12 Windows rules must be marked UnsupportedPlatform on macOS"
+    );
+
+    let baseline_excluded = baseline_report
+        .check_statuses
+        .iter()
+        .filter(|s| matches!(s.status, CheckExecutionStatus::NotApplicable { .. }))
+        .count();
+    assert_eq!(
+        baseline_excluded, 2,
+        "Exactly 2 macOS hardened rules must be excluded under Baseline profile"
+    );
+
+    let baseline_executed = baseline_report
+        .check_statuses
+        .iter()
+        .filter(|s| matches!(s.status, CheckExecutionStatus::Executed { .. }))
+        .count();
+    assert_eq!(
+        baseline_executed, 9,
+        "Exactly 9 macOS baseline rules must be executed under Baseline profile"
+    );
+
+    // Sum invariant: 32 + 2 + 9 == 43
+    assert_eq!(baseline_unsupported + baseline_excluded + baseline_executed, 43);
+
+    // 2. Hardened profile evaluation
+    let hardened_report = engine
+        .run_audit_with_profile(org_id, AuditProfile::Hardened)
+        .expect("Hardened audit must succeed");
+
+    assert_eq!(hardened_report.check_statuses.len(), 43);
+
+    let hardened_unsupported = hardened_report
+        .check_statuses
+        .iter()
+        .filter(|s| matches!(s.status, CheckExecutionStatus::UnsupportedPlatform { .. }))
+        .count();
+    assert_eq!(hardened_unsupported, 32);
+
+    let hardened_executed = hardened_report
+        .check_statuses
+        .iter()
+        .filter(|s| matches!(s.status, CheckExecutionStatus::Executed { .. }))
+        .count();
+    assert_eq!(
+        hardened_executed, 11,
+        "All 11 macOS native rules must be executed under Hardened profile"
+    );
+
+    // Sum invariant: 32 + 0 + 11 == 43
+    assert_eq!(hardened_unsupported + hardened_executed, 43);
+}
