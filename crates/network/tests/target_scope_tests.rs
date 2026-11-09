@@ -319,3 +319,72 @@ fn test_real_socket_tcp_connection_discovery() {
         "Port without listener must be Closed"
     );
 }
+
+#[test]
+fn test_ipv4_parsing_and_normalization() {
+    let t1 = CanonicalTarget::parse("192.0.2.1").expect("Valid IPv4");
+    assert_eq!(t1.normalized_host, "192.0.2.1");
+    assert_eq!(t1.port, None);
+
+    let t2 = CanonicalTarget::parse("  198.51.100.25:8080  ").expect("IPv4 with port");
+    assert_eq!(t2.normalized_host, "198.51.100.25");
+    assert_eq!(t2.port, Some(8080));
+
+    let t3 = CanonicalTarget::parse("https://203.0.113.10:443/api/v1?test=1")
+        .expect("IPv4 with URL scheme and path");
+    assert_eq!(t3.normalized_host, "203.0.113.10");
+    assert_eq!(t3.port, Some(443));
+}
+
+#[test]
+fn test_ipv6_parsing_and_bracket_normalization() {
+    let t1 = CanonicalTarget::parse("2001:db8::1").expect("Bare IPv6");
+    assert_eq!(t1.normalized_host, "2001:db8::1");
+
+    let t2 = CanonicalTarget::parse("[2001:db8::2]:8443").expect("Bracketed IPv6 with port");
+    assert_eq!(t2.normalized_host, "2001:db8::2");
+    assert_eq!(t2.port, Some(8443));
+
+    let t3 = CanonicalTarget::parse("[::1]").expect("Bracketed loopback IPv6");
+    assert_eq!(t3.normalized_host, "::1");
+}
+
+#[test]
+fn test_hostname_rfc1123_validation() {
+    let t1 = CanonicalTarget::parse("api.internal.corp").expect("Valid hostname");
+    assert_eq!(t1.normalized_host, "api.internal.corp");
+
+    let t2 = CanonicalTarget::parse("http://Web-01.Prod.Example.Com:8080/metrics")
+        .expect("Hostname with scheme");
+    assert_eq!(t2.normalized_host, "web-01.prod.example.com");
+    assert_eq!(t2.port, Some(8080));
+}
+
+#[test]
+fn test_dns_rebinding_prevention_via_pinned_socket_addr() {
+    let mut mock_dns = MockDnsResolver::new();
+    mock_dns.insert("rebind.example.com", vec!["93.184.216.34".parse().unwrap()]);
+
+    let scope = TargetScope::default();
+    let target = CanonicalTarget::parse("rebind.example.com").unwrap();
+    let pinned = resolve_and_pin(&target, &scope, &mock_dns, 443).unwrap();
+
+    assert_eq!(
+        pinned.socket_addr().ip(),
+        "93.184.216.34".parse::<std::net::IpAddr>().unwrap(),
+        "Pinned target remains bound to initially resolved IP"
+    );
+
+    // Attacker modifies DNS record to point to cloud metadata
+    mock_dns.insert(
+        "rebind.example.com",
+        vec!["169.254.169.254".parse().unwrap()],
+    );
+
+    // Subsequent operations using pinned target NEVER re-query DNS and remain pinned
+    assert_eq!(
+        pinned.socket_addr().ip(),
+        "93.184.216.34".parse::<std::net::IpAddr>().unwrap(),
+        "Pinned target is immune to DNS rebinding"
+    );
+}

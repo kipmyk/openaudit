@@ -18,18 +18,21 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 /// Observed state of a destination TCP port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PortStatus {
     /// Port accepted TCP connection (SYN-ACK received, handshake completed).
     Open,
     /// Port actively rejected TCP connection (RST received, connection refused).
     Closed,
-    /// Port dropped packets or failed to respond within timeout (filtered by firewall).
+    /// Port failed to respond within the configured timeout limit (dropped packets, routing delay, or packet filter).
+    TimedOut,
+    /// Port is confirmed filtered (e.g. administrative prohibited or packet dropped).
     Filtered,
 }
 
 /// Structured forensic result for a single probed TCP port.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PortScanResult {
     /// The probed TCP port number.
     pub port: u16,
@@ -37,7 +40,7 @@ pub struct PortScanResult {
     pub status: PortStatus,
     /// Connection round-trip latency in milliseconds.
     pub latency_ms: u64,
-    /// Additional error diagnostic (if closed or filtered).
+    /// Additional error diagnostic (if closed, timed out, or filtered).
     pub diagnostic: Option<String>,
 }
 
@@ -151,9 +154,12 @@ impl TcpScanner {
                     if kind == ErrorKind::ConnectionRefused {
                         (PortStatus::Closed, Some("Connection refused (RST)".into()))
                     } else if kind == ErrorKind::TimedOut || kind == ErrorKind::WouldBlock {
-                        (PortStatus::Filtered, Some("Connection timed out".into()))
+                        (
+                            PortStatus::TimedOut,
+                            Some("Connection timed out (no response)".into()),
+                        )
                     } else {
-                        (PortStatus::Filtered, Some(format!("{err}")))
+                        (PortStatus::TimedOut, Some(format!("{err}")))
                     }
                 }
             };
