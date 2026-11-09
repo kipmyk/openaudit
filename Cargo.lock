@@ -1843,6 +1843,7 @@ version = "0.1.0-alpha.0"
 dependencies = [
  "openaudit-core",
  "openaudit-engine",
+ "openaudit-network",
  "serde",
  "serde_json",
  "tao",

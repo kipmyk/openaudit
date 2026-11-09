@@ -68,6 +68,7 @@ fn run_desktop_app() -> Result<ExitCode, Box<dyn std::error::Error>> {
         });
 
     let webview = builder.build(&window)?;
+    let worker_proxy = event_loop.create_proxy();
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
@@ -287,6 +288,78 @@ fn run_desktop_app() -> Result<ExitCode, Box<dyn std::error::Error>> {
                                 }
                             }
                         }
+                    }
+                    "__eval_script" => {
+                        if let Some(script) = parsed["script"].as_str() {
+                            let _ = webview.evaluate_script(script);
+                        }
+                    }
+                    "run_perimeter_assessment" => {
+                        let target_str = parsed["target"].as_str().unwrap_or("127.0.0.1").to_string();
+                        let ports_str = parsed["ports"]
+                            .as_str()
+                            .unwrap_or("80, 443, 8080, 8443, 22")
+                            .to_string();
+                        let allow_loopback = parsed["allow_loopback"].as_bool().unwrap_or(true);
+
+                        let proxy = worker_proxy.clone();
+                        std::thread::spawn(move || {
+                            let mut ports = Vec::new();
+                            for part in ports_str.split(',') {
+                                let trimmed = part.trim();
+                                if let Some((start, end)) = trimmed.split_once('-') {
+                                    if let (Ok(s), Ok(e)) = (start.trim().parse::<u16>(), end.trim().parse::<u16>()) {
+                                        for p in s..=e {
+                                            ports.push(p);
+                                        }
+                                    }
+                                } else if let Ok(p) = trimmed.parse::<u16>() {
+                                    ports.push(p);
+                                }
+                            }
+                            if ports.is_empty() {
+                                ports = vec![80, 443, 8080, 8443, 22];
+                            }
+                            if ports.len() > 64 {
+                                ports.truncate(64);
+                            }
+
+                            let scope = openaudit_network::scope::TargetScope {
+                                allow_public: true,
+                                allow_loopback,
+                                allow_testnets: true,
+                                ..Default::default()
+                            };
+
+                            let resolver = openaudit_network::resolver::SystemDnsResolver;
+                            let config = openaudit_network::assessment::PerimeterAssessConfig::default();
+
+                            let script = match openaudit_network::assessment::PerimeterAssessor::assess(
+                                &target_str,
+                                &ports,
+                                &scope,
+                                &resolver,
+                                &config,
+                                None,
+                            ) {
+                                Ok(report) => {
+                                    let json_str = serde_json::to_string(&report).unwrap_or_default();
+                                    format!("window.onPerimeterAssessmentCompleted({json_str});")
+                                }
+                                Err(e) => {
+                                    let err_json = serde_json::json!({
+                                        "error": e.to_string(),
+                                        "target": target_str,
+                                    });
+                                    format!("window.onPerimeterAssessmentFailed({err_json});")
+                                }
+                            };
+
+                            let _ = proxy.send_event(AppEvent::Ipc(serde_json::json!({
+                                "action": "__eval_script",
+                                "script": script
+                            }).to_string()));
+                        });
                     }
                     _ => {}
                 }

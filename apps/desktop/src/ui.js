@@ -197,74 +197,109 @@ function startRemoteScan() {
   }
 
   if (outputContainer) outputContainer.style.display = 'block';
-  if (titleEl) titleEl.textContent = `TARGET SCOPE VALIDATION: ${target}`;
+  if (titleEl) titleEl.textContent = `PERIMETER ASSESSMENT: ${target}`;
   if (badgeEl) {
     badgeEl.className = 'terminal-badge';
-    badgeEl.innerHTML = `<svg class="spinner" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> VALIDATING`;
+    badgeEl.innerHTML = `<svg class="spinner" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> ASSESSING`;
   }
 
-  showProgress(`Validating target scope and anti-SSRF policy for ${target}...`, 30);
+  showProgress(`Running perimeter assessment for ${target}...`, 40);
 
-  let logs = `[*] OpenAudit M4 Target Scope & Boundary Validation\n`;
-  logs += `[*] Input Target:       ${target}\n`;
-  logs += `[*] Declared Ports:     ${ports}\n`;
-  logs += `[*] Assessment Profile: ${profile}\n`;
-  logs += `[*] Authorization:      Certified by operator token\n\n`;
-  logs += `[Stage 1/3] Canonical Target Parsing & RFC Normalization...\n`;
+  let logs = `[*] OpenAudit M4 Network Perimeter Assessment\n`;
+  logs += `[*] Target:             ${target}\n`;
+  logs += `[*] Target Ports:       ${ports}\n`;
+  logs += `[*] Profile:            ${profile}\n`;
+  logs += `[*] Authorization:      Certified by operator\n`;
+  logs += `[*] Executing target scope validation, TCP discovery, service identification, TLS, and HTTP assessment...\n`;
   if (consoleEl) consoleEl.textContent = logs;
 
-  setTimeout(() => {
-    // Check Cloud Metadata
-    const isMetadata = target === '169.254.169.254' || target.includes('metadata.google') || target.includes('169.254.');
-    if (isMetadata) {
-      logs += `[!] SSRF VIOLATION: Target ${target} resolves to Cloud Metadata Service.\n`;
-      logs += `[!] SCOPE DECISION: Prohibited { reason: "Cloud metadata endpoints are unconditionally blocked" }\n`;
-      logs += `[!] VALIDATION STATUS: REJECTED (Fail-closed SSRF defense)\n`;
-      if (consoleEl) consoleEl.textContent = logs;
-      if (badgeEl) {
-        badgeEl.className = 'terminal-badge';
-        badgeEl.style.color = 'var(--accent-red)';
-        badgeEl.textContent = 'BLOCKED (SSRF)';
-      }
-      hideProgress();
-      return;
+  sendIpc('run_perimeter_assessment', {
+    target: target,
+    ports: ports,
+    profile: profile,
+    allow_loopback: true
+  });
+}
+
+window.onPerimeterAssessmentCompleted = function(report) {
+  hideProgress();
+  const consoleEl = document.getElementById('remote-scan-console');
+  const badgeEl = document.getElementById('remote-scan-status-badge');
+  if (badgeEl) {
+    badgeEl.className = 'terminal-badge';
+    badgeEl.style.color = 'var(--accent-green)';
+    badgeEl.innerHTML = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> COMPLETED (${report.duration_ms}ms)`;
+  }
+
+  let out = `[+] Perimeter Assessment Completed in ${report.duration_ms}ms\n`;
+  out += `[*] Target:           ${report.raw_target} (${report.canonical_host})\n`;
+  out += `[*] Pinned IP:        ${report.pinned_ip} [${report.ip_classification}]\n`;
+  out += `[*] Ports Scanned:    ${report.ports_scanned} (${report.open_ports_count} Open)\n\n`;
+
+  out += `--- DISCOVERED ENDPOINTS ---\n`;
+  for (const ep of report.endpoints) {
+    if (ep.status === 'open') {
+      out += `  * Port ${ep.port}/tcp: [OPEN] Service: ${ep.service_name} (Confidence: ${ep.confidence})\n`;
+      if (ep.evidence) out += `    Evidence: ${ep.evidence}\n`;
     }
+  }
 
-    logs += `[+] Canonical Form:     ${target.toLowerCase().replace(/\/.*$/, '')}\n`;
-    logs += `[+] Standard Compliance: RFC 791 / RFC 1123 format validated\n\n`;
-    logs += `[Stage 2/3] Security Scope & Private CIDR Verification...\n`;
-    if (consoleEl) consoleEl.textContent = logs;
-    showProgress(`Verifying network scope policy...`, 70);
-  }, 300);
-
-  setTimeout(() => {
-    // Check Private RFC1918
-    const isPrivate = target.startsWith('10.') || target.startsWith('192.168.') || target.startsWith('172.16.');
-    if (isPrivate) {
-      logs += `[i] IP Classification:  Private RFC 1918 Internal Network\n`;
-      logs += `[i] CIDR Authorization: Requires explicit range authorization (--allow-cidr)\n`;
-      logs += `[+] Scope Decision:     Pending explicit CIDR authorization boundary\n\n`;
-    } else {
-      logs += `[+] IP Classification:  Routable Public / Testnet Scope\n`;
-      logs += `[+] Anti-SSRF Defense:  PASSED (No cloud metadata or prohibited overlap)\n`;
-      logs += `[+] Address Pinning:    Target bound to immutable socket address\n\n`;
+  if (report.tls_assessment) {
+    const tls = report.tls_assessment;
+    out += `\n--- TLS POSTURE (Port ${tls.target_port}) ---\n`;
+    out += `  * Version:          ${tls.negotiated_version || 'None'}\n`;
+    out += `  * Trust Status:     ${tls.trust_status}\n`;
+    out += `  * Hostname Match:   ${tls.hostname_matched}\n`;
+    if (tls.leaf_certificate) {
+      out += `  * Common Name:      ${tls.leaf_certificate.common_name || 'N/A'}\n`;
+      out += `  * Expiration:       ${tls.leaf_certificate.days_until_expiration} days remaining\n`;
     }
+  }
 
-    logs += `[Stage 3/3] Engine Status & Milestone Readiness...\n`;
-    logs += `[+] Target Validation:  PASSED (Target is well-formed and boundary-checked)\n`;
-    logs += `[i] Execution Engine:   Bounded TCP connection discovery (Milestone 4)\n`;
-    logs += `[i] Integrity Notice:   No simulated port probes or fabricated scan results rendered.\n`;
-    logs += `                        Active socket discovery executes via validated engine pipeline.\n`;
+  if (report.http_assessment) {
+    const http = report.http_assessment;
+    out += `\n--- HTTP POSTURE ---\n`;
+    out += `  * HTTPS Available:  ${http.https_available}\n`;
+    out += `  * HTTP->HTTPS Redir: ${http.http_to_https_redirect}\n`;
+    out += `  * HSTS Enabled:     ${http.hsts_enabled}\n`;
+    out += `  * CSP Present:      ${http.csp_present}\n`;
+    out += `  * XCTO nosniff:     ${http.x_content_type_options_nosniff}\n`;
+    if (http.server_header) out += `  * Server Banner:    ${http.server_header}\n`;
+  }
 
-    if (consoleEl) consoleEl.textContent = logs;
-    if (badgeEl) {
-      badgeEl.className = 'terminal-badge';
-      badgeEl.style.color = 'var(--accent-green)';
-      badgeEl.innerHTML = `<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> VALIDATED`;
+  out += `\n--- SECURITY FINDINGS (${report.findings.length}) ---\n`;
+  if (report.findings.length === 0) {
+    out += `  [+] No perimeter vulnerabilities or insecure configurations detected.\n`;
+  } else {
+    for (const f of report.findings) {
+      out += `  [${f.severity.toUpperCase()}] ${f.id} - ${f.title}\n`;
+      out += `    Category: ${f.category}\n`;
+      out += `    Endpoint: ${f.endpoint}\n`;
+      out += `    Evidence: ${f.evidence}\n`;
+      out += `    Action:   ${f.recommendation}\n\n`;
     }
-    showProgress(`Target boundary validation complete for ${target}`, 100);
-    setTimeout(hideProgress, 900);
-  }, 700);
+  }
+
+  out += `\n[!] ${report.architecture_disclaimer}\n`;
+  if (consoleEl) consoleEl.textContent = out;
+};
+
+window.onPerimeterAssessmentFailed = function(data) {
+  hideProgress();
+  const consoleEl = document.getElementById('remote-scan-console');
+  const badgeEl = document.getElementById('remote-scan-status-badge');
+  if (badgeEl) {
+    badgeEl.className = 'terminal-badge';
+    badgeEl.style.color = 'var(--accent-red)';
+    badgeEl.textContent = 'PROHIBITED / FAILED';
+  }
+
+  let out = `[!] PERIMETER ASSESSMENT REJECTED / FAILED\n`;
+  out += `[*] Target: ${data.target}\n`;
+  out += `[*] Reason: ${data.error}\n\n`;
+  out += `[!] The target violates declared scope authorization, anti-SSRF protections, or network connectivity constraints.\n`;
+  if (consoleEl) consoleEl.textContent = out;
+};
 }
 
 function showRemoteScanNotice() {
