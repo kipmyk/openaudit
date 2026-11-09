@@ -1,11 +1,12 @@
 //! Authorized target scope and SSRF-safe destination policy evaluation.
 //!
-//! Enforces clear, policy-driven authorization across public, private,
-//! loopback, and link-local ranges, with unconditional defense against
-//! cloud metadata services (e.g. AWS 169.254.169.254, GCP metadata.google.internal).
+//! Enforces explicit, CIDR-based authorization for private enterprise networks,
+//! separate controls for loopback and link-local destinations, and unconditional
+//! defense against cloud metadata endpoints (even if overlapping CIDRs are provided).
 
 use crate::error::NetworkError;
 use std::collections::HashSet;
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 /// Comprehensive classification of an IP address.
@@ -25,6 +26,130 @@ pub enum IpClassification {
     SpecialUseOrReserved,
 }
 
+/// An explicitly parsed and normalized IP CIDR block (IPv4 or IPv6).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IpCidr {
+    /// IPv4 CIDR block with prefix length 0..=32.
+    V4 { network: Ipv4Addr, prefix_len: u8 },
+    /// IPv6 CIDR block with prefix length 0..=128.
+    V6 { network: Ipv6Addr, prefix_len: u8 },
+}
+
+impl IpCidr {
+    /// Parses and normalizes a CIDR string (e.g. `10.20.0.0/16`, `192.168.1.0/24`, `fd12:3456::/64`).
+    ///
+    /// Clears any host bits outside the prefix length to ensure canonical network masking.
+    pub fn parse(input: &str) -> Result<Self, NetworkError> {
+        let trimmed = input.trim();
+        let (ip_str, prefix_str) = trimmed.split_once('/').ok_or_else(|| {
+            NetworkError::TargetParse(format!(
+                "Malformed CIDR '{trimmed}': missing '/' prefix separator (e.g. 10.20.0.0/16)"
+            ))
+        })?;
+
+        if let Ok(ipv4) = ip_str.parse::<Ipv4Addr>() {
+            let prefix_len = prefix_str.parse::<u8>().map_err(|_| {
+                NetworkError::TargetParse(format!("Invalid CIDR prefix length: '{prefix_str}'"))
+            })?;
+            if prefix_len > 32 {
+                return Err(NetworkError::TargetParse(format!(
+                    "IPv4 CIDR prefix /{prefix_len} exceeds maximum /32"
+                )));
+            }
+
+            let mask = if prefix_len == 0 {
+                0u32
+            } else {
+                !((1u32 << (32 - prefix_len)) - 1)
+            };
+            let net_u32 = u32::from(ipv4) & mask;
+            let network = Ipv4Addr::from(net_u32);
+
+            Ok(Self::V4 {
+                network,
+                prefix_len,
+            })
+        } else if let Ok(ipv6) = ip_str.parse::<Ipv6Addr>() {
+            let prefix_len = prefix_str.parse::<u8>().map_err(|_| {
+                NetworkError::TargetParse(format!("Invalid CIDR prefix length: '{prefix_str}'"))
+            })?;
+            if prefix_len > 128 {
+                return Err(NetworkError::TargetParse(format!(
+                    "IPv6 CIDR prefix /{prefix_len} exceeds maximum /128"
+                )));
+            }
+
+            let mask = if prefix_len == 0 {
+                0u128
+            } else {
+                !((1u128 << (128 - prefix_len)) - 1)
+            };
+            let net_u128 = u128::from(ipv6) & mask;
+            let network = Ipv6Addr::from(net_u128);
+
+            Ok(Self::V6 {
+                network,
+                prefix_len,
+            })
+        } else {
+            Err(NetworkError::TargetParse(format!(
+                "Malformed IP address in CIDR: '{ip_str}'"
+            )))
+        }
+    }
+
+    /// Evaluates whether an IP address is contained within this CIDR block.
+    #[must_use]
+    pub fn contains(&self, ip: IpAddr) -> bool {
+        match (self, ip) {
+            (
+                Self::V4 {
+                    network,
+                    prefix_len,
+                },
+                IpAddr::V4(v4),
+            ) => {
+                let mask = if *prefix_len == 0 {
+                    0u32
+                } else {
+                    !((1u32 << (32 - *prefix_len)) - 1)
+                };
+                (u32::from(v4) & mask) == (u32::from(*network) & mask)
+            }
+            (
+                Self::V6 {
+                    network,
+                    prefix_len,
+                },
+                IpAddr::V6(v6),
+            ) => {
+                let mask = if *prefix_len == 0 {
+                    0u128
+                } else {
+                    !((1u128 << (128 - *prefix_len)) - 1)
+                };
+                (u128::from(v6) & mask) == (u128::from(*network) & mask)
+            }
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Display for IpCidr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::V4 {
+                network,
+                prefix_len,
+            } => write!(f, "{network}/{prefix_len}"),
+            Self::V6 {
+                network,
+                prefix_len,
+            } => write!(f, "{network}/{prefix_len}"),
+        }
+    }
+}
+
 /// The policy decision for a destination IP under a declared target scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeDecision {
@@ -42,15 +167,15 @@ pub enum ScopeDecision {
 pub struct TargetScope {
     /// Allow routable public targets (default: true).
     pub allow_public: bool,
-    /// Allow private RFC 1918 internal enterprise targets (default: false, requires --allow-private).
-    pub allow_private: bool,
-    /// Allow loopback testing (default: false, requires --allow-loopback).
+    /// Explicit authorized private CIDR ranges (RFC 1918 / IPv6 ULA).
+    pub authorized_cidrs: Vec<IpCidr>,
+    /// Allow loopback testing (default: false, requires deliberate --allow-loopback).
     pub allow_loopback: bool,
-    /// Allow link-local assessment (default: false, requires --allow-link-local).
+    /// Allow link-local assessment (default: false, requires deliberate --allow-link-local).
     pub allow_link_local: bool,
     /// Allow documentation and testnet ranges (RFC 5737: 192.0.2.0/24, etc.).
     pub allow_testnets: bool,
-    /// Explicit authorized IP addresses (overrides general blocks except cloud metadata).
+    /// Explicit authorized individual IP addresses.
     pub explicit_allowed_ips: HashSet<IpAddr>,
 }
 
@@ -58,7 +183,7 @@ impl Default for TargetScope {
     fn default() -> Self {
         Self {
             allow_public: true,
-            allow_private: false,
+            authorized_cidrs: Vec::new(),
             allow_loopback: false,
             allow_link_local: false,
             allow_testnets: false,
@@ -68,12 +193,12 @@ impl Default for TargetScope {
 }
 
 impl TargetScope {
-    /// Scope tailored for local lab testing (permits loopback and RFC 1918).
+    /// Scope tailored for local lab testing with an authorized private CIDR.
     #[must_use]
-    pub fn local_lab() -> Self {
+    pub fn local_lab_with_cidr(cidr: IpCidr) -> Self {
         Self {
             allow_public: true,
-            allow_private: true,
+            authorized_cidrs: vec![cidr],
             allow_loopback: true,
             allow_link_local: false,
             allow_testnets: true,
@@ -81,11 +206,19 @@ impl TargetScope {
         }
     }
 
+    /// Authorizes an additional CIDR range.
+    pub fn add_authorized_cidr(&mut self, cidr: IpCidr) {
+        if !self.authorized_cidrs.contains(&cidr) {
+            self.authorized_cidrs.push(cidr);
+        }
+    }
+
     /// Evaluates an IP address against this scope and returns a typed policy decision.
     pub fn evaluate(&self, ip: IpAddr) -> ScopeDecision {
         let classification = classify_ip(ip);
 
-        // 1. Cloud Metadata is UNCONDITIONALLY PROHIBITED. No flag may bypass this.
+        // 1. Cloud Metadata is UNCONDITIONALLY PROHIBITED.
+        // Even if an operator supplies 0.0.0.0/0 or 169.254.0.0/16, metadata is NEVER allowed.
         if classification == IpClassification::CloudMetadata {
             return ScopeDecision::Prohibited {
                 classification,
@@ -93,12 +226,12 @@ impl TargetScope {
             };
         }
 
-        // 2. Check explicit whitelist
+        // 2. Check explicit individual IP whitelist
         if self.explicit_allowed_ips.contains(&ip) {
             return ScopeDecision::Allowed(classification);
         }
 
-        // 3. Evaluate according to scope flags
+        // 3. Evaluate according to scope rules
         match classification {
             IpClassification::Public => {
                 if self.allow_public {
@@ -111,12 +244,13 @@ impl TargetScope {
                 }
             }
             IpClassification::PrivateRfc1918 => {
-                if self.allow_private {
+                // Must fall within an explicitly authorized CIDR!
+                if self.authorized_cidrs.iter().any(|c| c.contains(ip)) {
                     ScopeDecision::Allowed(classification)
                 } else {
                     ScopeDecision::Prohibited {
                         classification,
-                        reason: "Private internal RFC 1918 address (requires explicit authorization: --allow-private)",
+                        reason: "Private RFC 1918 / ULA address outside explicitly authorized CIDR scope (--allow-cidr)",
                     }
                 }
             }
@@ -172,7 +306,6 @@ pub fn classify_ip(ip: IpAddr) -> IpClassification {
     match ip {
         IpAddr::V4(v4) => classify_ipv4(v4),
         IpAddr::V6(v6) => {
-            // Check for IPv4-mapped IPv6 (::ffff:192.0.2.1)
             if let Some(v4) = v6.to_ipv4_mapped() {
                 classify_ipv4(v4)
             } else {
@@ -201,9 +334,6 @@ fn classify_ipv4(ip: Ipv4Addr) -> IpClassification {
     }
 
     // 4. RFC 1918 Private ranges:
-    // - 10.0.0.0/8
-    // - 172.16.0.0/12 (172.16.0.0 - 172.31.255.255)
-    // - 192.168.0.0/16
     if octets[0] == 10
         || (octets[0] == 172 && (16..=31).contains(&octets[1]))
         || (octets[0] == 192 && octets[1] == 168)
@@ -212,16 +342,6 @@ fn classify_ipv4(ip: Ipv4Addr) -> IpClassification {
     }
 
     // 5. Special-use or reserved:
-    // - Current network: 0.0.0.0/8
-    // - Carrier Grade NAT: 100.64.0.0/10 (100.64.0.0 - 100.127.255.255)
-    // - IETF Protocol assignments: 192.0.0.0/24
-    // - Documentation (RFC 5737):
-    //   - TEST-NET-1: 192.0.2.0/24
-    //   - TEST-NET-2: 198.51.100.0/24
-    //   - TEST-NET-3: 203.0.113.0/24
-    // - Benchmarking (RFC 2544): 198.18.0.0/15
-    // - Multicast: 224.0.0.0/4
-    // - Broadcast: 255.255.255.255
     if octets[0] == 0
         || (octets[0] == 100 && (64..=127).contains(&octets[1]))
         || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
@@ -285,11 +405,8 @@ fn classify_ipv6(ip: Ipv6Addr) -> IpClassification {
 }
 
 fn is_documentation_ipv4(octets: [u8; 4]) -> bool {
-    // 192.0.2.0/24 (TEST-NET-1)
     (octets[0] == 192 && octets[1] == 0 && octets[2] == 2)
-        // 198.51.100.0/24 (TEST-NET-2)
         || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
-        // 203.0.113.0/24 (TEST-NET-3)
         || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
 }
 
