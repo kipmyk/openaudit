@@ -79,5 +79,20 @@ echo "==========================================================================
 echo "[+] macOS Application Bundle Created Successfully:"
 echo "    App Bundle: ${APP_BUNDLE}"
 echo "    Distribution Zip: ${DIST_DIR}/${ZIP_NAME} ($(du -h "${DIST_DIR}/${ZIP_NAME}" | cut -f1))"
+echo "--------------------------------------------------------------------------------"
+echo " Code-Signing & Gatekeeper Distribution Status:"
+if [ -n "${MACOS_DEVELOPER_ID:-}" ]; then
+    echo "    Mode: Developer ID Application (${MACOS_DEVELOPER_ID})"
+    if [ "${MACOS_NOTARIZE:-false}" = "true" ]; then
+        echo "    Notarization: Complete (Gatekeeper compliant for distribution)"
+    else
+        echo "    Notarization: Pending (Requires notarization before distribution)"
+    fi
+else
+    echo "    Mode: Ad-Hoc Signature (codesign --sign -)"
+    echo "    Status: Valid for LOCAL execution on Apple Silicon only."
+    echo "    Notice: NOT valid for external distribution. Gatekeeper requires"
+    echo "            Developer ID signing and Apple Notarization."
+fi
 echo "================================================================================"
 
