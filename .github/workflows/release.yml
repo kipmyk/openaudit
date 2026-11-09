@@ -61,8 +61,10 @@ jobs:
           cargo test -p openaudit-core --lib -- --skip tpm
           cargo test -p openaudit-engine --verbose
 
-      - name: Build and package portable bundle
-        run: ./scripts/package-release.sh
+      - name: Build and package portable bundle and macOS .app bundle
+        run: |
+          ./scripts/package-release.sh
+          ./scripts/package-macos-app.sh
 
       - name: Verify clean CLI execution and standalone HTML report
         run: |
@@ -77,6 +79,7 @@ jobs:
           name: openaudit-macos-aarch64
           path: |
             artifacts/packages/*darwin*.tar.gz
+            artifacts/packages/OpenAudit*.zip
             artifacts/packages/SHA256SUMS
 
   package-windows:

@@ -108,10 +108,11 @@ jobs:
       - name: Run Clippy linter
         run: cargo clippy --all-targets --workspace -- -D warnings
 
-      - name: Compile and run engine and core test suite on native Windows
+      - name: Compile and run engine, core, and CLI test suite on native Windows
         run: |
           cargo test -p openaudit-core --lib -- --skip tpm
           cargo test -p openaudit-engine --verbose
+          cargo test -p openaudit-cli --verbose
 
   macos-native:
     name: macOS Native Verification
@@ -132,7 +133,8 @@ jobs:
       - name: Run Clippy linter
         run: cargo clippy --all-targets --workspace -- -D warnings
 
-      - name: Compile and run engine and core test suite on native macOS
+      - name: Compile and run engine, core, and CLI test suite on native macOS
         run: |
           cargo test -p openaudit-core --lib -- --skip tpm
           cargo test -p openaudit-engine --verbose
+          cargo test -p openaudit-cli --verbose
