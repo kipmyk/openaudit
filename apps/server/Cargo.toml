@@ -10,13 +10,35 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 
+[lib]
+name = "openaudit_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "openaudit-server"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
+chrono = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 openaudit-core = { workspace = true }
 openaudit-engine = { workspace = true }
-serde_json = { workspace = true }
+openaudit-network = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
 rustls-pemfile = { workspace = true }
+rusqlite = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+argon2 = { workspace = true }

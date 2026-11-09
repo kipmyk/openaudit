@@ -44,3 +44,4 @@ private/
 # Whitelist project test directories (overriding any global gitignore)
 !tests/
 !**/tests/
+!**/migrations/*.sql

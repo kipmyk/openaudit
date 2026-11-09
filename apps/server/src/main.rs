@@ -4,6 +4,19 @@
 //! and outbox retrieval verification engines, TPM-backed monotonic counter
 //! synchronization, and catalog promotion services for Dimension 4.
 
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::significant_drop_tightening,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::result_large_err,
+    clippy::must_use_candidate,
+    clippy::doc_markdown,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::too_many_arguments
+)]
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -226,6 +239,7 @@ fn print_help() {
         "OpenAudit Server v{}\n\n\
         Usage: openaudit-server <COMMAND> [OPTIONS]\n\n\
         Commands:\n  \
+          serve                            Run the OpenAudit control plane HTTP server (Milestone 5)\n  \
           authority status                 Inspect authority persistence databases and catalog health\n  \
           authority token-issue            Issue and persist a single-use enrollment token\n  \
           authority process-enrollment     Validate enrollment transcript and HMAC proof\n  \
@@ -237,7 +251,9 @@ fn print_help() {
           version                          Print version information\n  \
           help                             Print this help message\n\n\
         Global Options:\n  \
-          --data-dir <DIR>                 Authority storage root directory (default: ./data)\n",
+          --data-dir <DIR>                 Storage root directory (default: ./data)\n  \
+          --bind <IP:PORT>                 Network address to bind HTTP server (default: 127.0.0.1:8080)\n  \
+          --port <PORT>                    Override port number for HTTP server\n",
         openaudit_core::version()
     );
 }
@@ -813,6 +829,70 @@ fn run_authority_serve_tls(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_serve(args: &[String]) -> Result<(), String> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+
+    let mut config = openaudit_server::config::ServerConfig::from_env()?;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bind" => {
+                i += 1;
+                if i < args.len() {
+                    config.bind_addr = args[i]
+                        .parse()
+                        .map_err(|e| format!("Invalid --bind address: {e}"))?;
+                }
+            }
+            "--port" => {
+                i += 1;
+                if i < args.len() {
+                    let p: u16 = args[i]
+                        .parse()
+                        .map_err(|e| format!("Invalid --port: {e}"))?;
+                    config.bind_addr.set_port(p);
+                }
+            }
+            "--data-dir" => {
+                i += 1;
+                if i < args.len() {
+                    config.data_dir = PathBuf::from(&args[i]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    config.validate()?;
+
+    fs::create_dir_all(&config.data_dir)
+        .map_err(|e| format!("Failed to create data directory: {e}"))?;
+
+    let store_path = config.data_dir.join("control_plane.db");
+    let store = Arc::new(
+        openaudit_server::store::sqlite::SqliteControlPlaneStore::open(&store_path)
+            .map_err(|e| format!("Failed to open control plane store: {e}"))?,
+    );
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("Failed to start tokio runtime: {e}"))?;
+
+    rt.block_on(async {
+        openaudit_server::run_server(config, store)
+            .await
+            .map_err(|e| e.to_string())
+    })
+}
+
 /// Dispatches command line arguments to subcommands.
 ///
 /// # Errors
@@ -824,6 +904,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
 
     match args[1].as_str() {
+        "serve" | "start" => run_serve(&args[2..]),
         "version" | "--version" | "-V" => {
             print_version();
             Ok(())
