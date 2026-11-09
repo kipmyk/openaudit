@@ -9,6 +9,7 @@ pub mod redirect;
 pub mod resolver;
 pub mod scanner;
 pub mod scope;
+pub mod service;
 pub mod target;
 
 pub use error::NetworkError;
@@ -17,4 +18,8 @@ pub use redirect::RedirectValidator;
 pub use resolver::{DnsResolver, SystemDnsResolver};
 pub use scanner::{PortScanResult, PortStatus, TcpScanConfig, TcpScanner};
 pub use scope::{IpCidr, IpClassification, ScopeDecision, TargetScope};
+pub use service::{
+    IdentificationConfidence, IdentifiedProtocol, ServiceIdentification, ServiceIdentifier,
+    ServiceIdentifyConfig,
+};
 pub use target::{CanonicalTarget, TargetType};
