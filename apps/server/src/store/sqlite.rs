@@ -57,6 +57,17 @@ impl SqliteControlPlaneStore {
         Ok(store)
     }
 
+    /// Executes arbitrary SQL for test state setup (e.g. simulating time passage).
+    #[doc(hidden)]
+    pub fn execute_raw_for_test(&self, sql: &str) -> Result<usize, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(format!("lock poisoned: {e}")))?;
+        conn.execute(sql, [])
+            .map_err(|e| StoreError::Database(e.to_string()))
+    }
+
     /// Executes database schema migrations.
     fn migrate(&self) -> Result<(), StoreError> {
         let conn = self
@@ -2084,18 +2095,19 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             .lock()
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
+        let cutoff = (Utc::now() - Duration::minutes(15)).to_rfc3339();
         let mut stmt = conn
             .prepare(
                 "SELECT id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, revoked_at, created_at, updated_at
                  FROM enrolled_agents
-                 WHERE auth_token_hash = ?1 OR previous_auth_token_hash = ?1
+                 WHERE auth_token_hash = ?1 OR (previous_auth_token_hash = ?1 AND updated_at >= ?2)
                  ORDER BY CASE WHEN auth_token_hash = ?1 THEN 0 ELSE 1 END
                  LIMIT 1",
             )
             .map_err(|e| StoreError::Database(e.to_string()))?;
 
         let row = stmt
-            .query_row(params![auth_token_hash], |r| {
+            .query_row(params![auth_token_hash, cutoff], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,

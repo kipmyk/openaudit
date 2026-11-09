@@ -35,6 +35,8 @@ private/
 *.lcov
 /scratch/
 /tmp/
+/data/
+*.db
 
 # Demonstration and test recording artifacts
 /artifacts/

@@ -33,6 +33,7 @@
 
 use axum::body::{to_bytes, Body};
 use axum::http::{header, Method, Request, StatusCode};
+use chrono::Utc;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -1096,4 +1097,110 @@ async fn test_m6_adversarial_stale_lease_reclaim_and_rotation_recovery() {
         pending_body["error"].as_str().unwrap(),
         "agent_pending_approval"
     );
+}
+
+#[tokio::test]
+async fn test_m8_bounded_credential_rotation_grace_period() {
+    let (app, store, _) = create_test_env();
+    let (admin_token, _org_id) =
+        setup_tenant_and_admin(&app, "Rotation Tenant", "rot-tenant", "admin@rot.com").await;
+
+    // 1. Issue token and enroll agent
+    let (token_id, token_secret, nonce) = {
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/v1/agents/tokens")
+            .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "machine_id": "machine-rot-test" }).to_string(),
+            ))
+            .unwrap();
+        let (_, b) = json_response(app.clone().oneshot(req).await.unwrap()).await;
+        (
+            b["token_id"].as_str().unwrap().to_string(),
+            b["token_secret"].as_str().unwrap().to_string(),
+            b["challenge_nonce"].as_str().unwrap().to_string(),
+        )
+    };
+
+    let enroll_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v1/agent/enroll")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "token_id": token_id,
+                "token_secret": token_secret,
+                "challenge_response": format!("{}:machine-rot-test", nonce),
+                "machine_id": "machine-rot-test",
+                "hostname": "rot.corp",
+                "agent_version": "0.1.0",
+                "public_identity": "pure-crypto:rot"
+            })
+            .to_string(),
+        ))
+        .unwrap();
+    let (st_enroll, b_enroll) = json_response(app.clone().oneshot(enroll_req).await.unwrap()).await;
+    assert_eq!(st_enroll, StatusCode::CREATED);
+    let original_key = b_enroll["auth_key"].as_str().unwrap().to_string();
+    let agent_id = b_enroll["agent_id"].as_str().unwrap().to_string();
+
+    // 2. Rotate credentials
+    let rot_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v1/agent/rotate-credentials")
+        .header("X-Agent-Key", &original_key)
+        .body(Body::empty())
+        .unwrap();
+    let (rot_st, rot_b) = json_response(app.clone().oneshot(rot_req).await.unwrap()).await;
+    assert_eq!(rot_st, StatusCode::OK);
+    let new_key = rot_b["new_auth_key"].as_str().unwrap().to_string();
+
+    // 3. Within 15-minute grace period: original key STILL works
+    let valid_fallback_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v1/agent/heartbeat")
+        .header("X-Agent-Key", &original_key)
+        .body(Body::empty())
+        .unwrap();
+    let (st_fb, _) = json_response(app.clone().oneshot(valid_fallback_req).await.unwrap()).await;
+    assert_eq!(
+        st_fb,
+        StatusCode::OK,
+        "Original key must be accepted during active grace period"
+    );
+
+    // 4. Simulate passage of time past bounded grace period (20 minutes ago)
+    let twenty_mins_ago = (Utc::now() - chrono::Duration::minutes(20)).to_rfc3339();
+    store
+        .execute_raw_for_test(&format!(
+            "UPDATE enrolled_agents SET updated_at = '{twenty_mins_ago}' WHERE id = '{agent_id}'"
+        ))
+        .expect("Time simulation update must succeed");
+
+    // 5. Past grace period: original key MUST be rejected fail-closed (401 Unauthorized)
+    let expired_fallback_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v1/agent/heartbeat")
+        .header("X-Agent-Key", &original_key)
+        .body(Body::empty())
+        .unwrap();
+    let (st_expired, _) =
+        json_response(app.clone().oneshot(expired_fallback_req).await.unwrap()).await;
+    assert_eq!(
+        st_expired,
+        StatusCode::UNAUTHORIZED,
+        "Expired fallback key must be rejected after bounded grace period"
+    );
+
+    // 6. New key continues to work normally
+    let new_key_req = Request::builder()
+        .method(Method::POST)
+        .uri("/api/v1/agent/heartbeat")
+        .header("X-Agent-Key", &new_key)
+        .body(Body::empty())
+        .unwrap();
+    let (st_new, _) = json_response(app.clone().oneshot(new_key_req).await.unwrap()).await;
+    assert_eq!(st_new, StatusCode::OK, "New key remains fully authorized");
 }

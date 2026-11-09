@@ -35,8 +35,26 @@ fn get_postgres_url() -> Option<String> {
     Some("postgres://postgres:postgres@127.0.0.1:5433/openaudit_test".to_string())
 }
 
+static PG_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn truncate_tables(pg_url: &str) {
+    if let Ok((pg_client, connection)) =
+        tokio_postgres::connect(pg_url, tokio_postgres::NoTls).await
+    {
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let _ = pg_client
+            .batch_execute(
+                "TRUNCATE TABLE assessment_findings, assessment_jobs, assessment_schedules, assets, agent_enrollment_tokens, enrolled_agents, managed_findings, finding_status_history, users, organizations CASCADE;",
+            )
+            .await;
+    }
+}
+
 #[tokio::test]
 async fn test_postgres_full_persistence_and_isolation_lifecycle() {
+    let _lock = PG_TEST_LOCK.lock().await;
     let Some(pg_url) = get_postgres_url() else {
         eprintln!("Skipping PostgreSQL integration test: no test database URL configured");
         return;
@@ -54,20 +72,7 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
 
     // 1. Test migration idempotency
     store.migrate().await.expect("Migration must be idempotent");
-
-    // Clean tables for fresh test run
-    if let Ok((pg_client, connection)) =
-        tokio_postgres::connect(&pg_url, tokio_postgres::NoTls).await
-    {
-        tokio::spawn(async move {
-            let _ = connection.await;
-        });
-        let _ = pg_client
-            .batch_execute(
-                "TRUNCATE TABLE assessment_findings, assessment_jobs, assessment_schedules, assets, agent_enrollment_tokens, enrolled_agents, users, organizations CASCADE;",
-            )
-            .await;
-    }
+    truncate_tables(&pg_url).await;
 
     let org_suffix = Uuid::new_v4().to_string()[..8].to_string();
     let org_slug = format!("pg-tenant-{org_suffix}");
@@ -379,6 +384,7 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
 
 #[tokio::test]
 async fn test_postgres_m7_finding_lifecycle_and_posture() {
+    let _lock = PG_TEST_LOCK.lock().await;
     let Some(pg_url) = get_postgres_url() else {
         return;
     };
@@ -392,9 +398,11 @@ async fn test_postgres_m7_finding_lifecycle_and_posture() {
         .migrate()
         .await
         .expect("Migration 003 must be applied in PG");
+    truncate_tables(&pg_url).await;
 
+    let org_slug = format!("pg-m7-{}", Uuid::new_v4());
     let org = store
-        .create_organization(&format!("pg-m7-{}", Uuid::new_v4()), "PG M7 Corp")
+        .create_organization("PG M7 Corp", &org_slug)
         .await
         .unwrap();
 

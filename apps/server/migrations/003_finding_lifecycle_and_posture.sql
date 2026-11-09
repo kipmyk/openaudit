@@ -67,3 +67,4 @@ CREATE INDEX IF NOT EXISTS idx_managed_findings_org_asset ON managed_findings(or
 CREATE INDEX IF NOT EXISTS idx_managed_findings_org_severity ON managed_findings(org_id, severity);
 CREATE INDEX IF NOT EXISTS idx_finding_history_finding ON finding_status_history(finding_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_assessment_findings_fp ON assessment_findings(fingerprint);
+
