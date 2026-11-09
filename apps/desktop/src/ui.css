@@ -624,6 +624,11 @@ body {
 }
 
 /* Form Inputs & Controls */
+input, textarea, select, .input {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
 .input {
   background: var(--bg-card);
   border: 1px solid var(--border-light);
@@ -634,6 +639,9 @@ body {
   outline: none;
   font-family: var(--font-sans);
   transition: border-color 0.15s ease;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
 }
 
 .input:focus {
