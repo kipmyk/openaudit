@@ -73,13 +73,34 @@ pub async fn execute_assessment(
                 })
                 .collect();
 
+            let rules_evaluated: Vec<String> = {
+                let from_statuses: Vec<String> = report
+                    .check_statuses
+                    .iter()
+                    .map(|cs| cs.rule_id.clone())
+                    .collect();
+                if from_statuses.is_empty() {
+                    new_findings
+                        .iter()
+                        .map(|f| f.rule_id.clone())
+                        .collect::<std::collections::HashSet<_>>()
+                        .into_iter()
+                        .collect()
+                } else {
+                    from_statuses
+                }
+            };
+
             let findings_count = new_findings.len();
-            if !new_findings.is_empty() {
-                store
-                    .create_findings(job.org_id, job.id, &new_findings)
-                    .await
-                    .map_err(|e| format!("Failed to store findings: {e}"))?;
-            }
+            store
+                .record_job_findings_and_reconcile_lifecycle(
+                    job.org_id,
+                    job.id,
+                    &new_findings,
+                    &rules_evaluated,
+                )
+                .await
+                .map_err(|e| format!("Failed to record findings and reconcile lifecycle: {e}"))?;
 
             let duration_ms = start_time.elapsed().as_millis() as u64;
             Ok(JobExecutionSummary {
@@ -144,13 +165,46 @@ pub async fn execute_assessment(
                 })
                 .collect();
 
-            let findings_count = new_findings.len();
-            if !new_findings.is_empty() {
-                store
-                    .create_findings(job.org_id, job.id, &new_findings)
-                    .await
-                    .map_err(|e| format!("Failed to store findings: {e}"))?;
+            let mut rules_evaluated: Vec<String> = vec![
+                "network.exposure.ftp".to_string(),
+                "network.exposure.telnet".to_string(),
+                "network.exposure.smb".to_string(),
+                "network.exposure.rdp".to_string(),
+                "network.exposure.vnc".to_string(),
+            ];
+            if report.tls_assessment.is_some() {
+                rules_evaluated.extend(vec![
+                    "tls.cert.validity".to_string(),
+                    "tls.cert.hostname".to_string(),
+                    "tls.version.support".to_string(),
+                    "tls.cipher.strength".to_string(),
+                ]);
             }
+            if report.http_assessment.is_some() {
+                rules_evaluated.extend(vec![
+                    "http.headers.hsts".to_string(),
+                    "http.headers.csp".to_string(),
+                    "http.headers.x_content_type_options".to_string(),
+                    "http.headers.x_frame_options".to_string(),
+                    "http.headers.referrer_policy".to_string(),
+                ]);
+            }
+            for f in &new_findings {
+                if !rules_evaluated.contains(&f.rule_id) {
+                    rules_evaluated.push(f.rule_id.clone());
+                }
+            }
+
+            let findings_count = new_findings.len();
+            store
+                .record_job_findings_and_reconcile_lifecycle(
+                    job.org_id,
+                    job.id,
+                    &new_findings,
+                    &rules_evaluated,
+                )
+                .await
+                .map_err(|e| format!("Failed to record findings and reconcile lifecycle: {e}"))?;
 
             let duration_ms = start_time.elapsed().as_millis() as u64;
             Ok(JobExecutionSummary {

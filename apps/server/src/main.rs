@@ -14,6 +14,9 @@
     clippy::doc_markdown,
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::option_if_let_else,
     clippy::too_many_arguments
 )]
 

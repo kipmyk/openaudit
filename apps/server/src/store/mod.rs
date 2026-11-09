@@ -9,8 +9,11 @@ use std::fmt;
 use uuid::Uuid;
 
 pub use models::{
-    AgentEnrollmentToken, AgentStatus, AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset,
-    EnrolledAgent, JobStatus, NewFinding, Organization, RevokedToken, Role, User,
+    compute_finding_fingerprint, AgentEnrollmentToken, AgentStatus, AssessmentComparison,
+    AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset, EnrolledAgent, FindingStatus,
+    FindingStatusHistory, JobStatus, ManagedFinding, NewFinding, Organization, ResolutionType,
+    RevokedToken, Role, SecurityPostureSummary, SeverityBreakdown, SeverityChange, StatusBreakdown,
+    User,
 };
 
 /// Errors originating from the persistence layer.
@@ -232,4 +235,75 @@ pub trait ControlPlaneStore: Send + Sync + 'static {
         org_id: Uuid,
         error_message: &str,
     ) -> Result<(), StoreError>;
+
+    // --- Finding Lifecycle, Remediation & Posture (M7) ---
+    async fn record_job_findings_and_reconcile_lifecycle(
+        &self,
+        org_id: Uuid,
+        job_id: Uuid,
+        findings: &[NewFinding],
+        rules_evaluated: &[String],
+    ) -> Result<Vec<AssessmentFinding>, StoreError>;
+
+    async fn get_managed_finding(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+    ) -> Result<Option<ManagedFinding>, StoreError>;
+
+    async fn list_managed_findings(
+        &self,
+        org_id: Uuid,
+        asset_id: Option<Uuid>,
+        status: Option<FindingStatus>,
+        severity: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<ManagedFinding>, usize), StoreError>;
+
+    async fn update_managed_finding_status(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+        user_id: Option<Uuid>,
+        new_status: FindingStatus,
+        resolution_type: Option<ResolutionType>,
+        comment: Option<&str>,
+    ) -> Result<ManagedFinding, StoreError>;
+
+    async fn assign_managed_finding_owner(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+        assigned_owner: Option<&str>,
+        due_date: Option<DateTime<Utc>>,
+        remediation_notes: Option<&str>,
+    ) -> Result<ManagedFinding, StoreError>;
+
+    async fn get_finding_status_history(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+    ) -> Result<Vec<FindingStatusHistory>, StoreError>;
+
+    async fn compare_assessments(
+        &self,
+        org_id: Uuid,
+        base_job_id: Uuid,
+        target_job_id: Uuid,
+    ) -> Result<AssessmentComparison, StoreError>;
+
+    async fn get_security_posture_summary(
+        &self,
+        org_id: Uuid,
+        asset_id: Option<Uuid>,
+    ) -> Result<SecurityPostureSummary, StoreError>;
+
+    async fn list_assessment_history(
+        &self,
+        org_id: Uuid,
+        asset_id: Option<Uuid>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<AssessmentJob>, usize), StoreError>;
 }

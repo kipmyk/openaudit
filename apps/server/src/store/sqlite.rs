@@ -1,14 +1,16 @@
 //! SQLite control-plane storage implementation for local self-hosting and deterministic testing.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::Mutex;
 use uuid::Uuid;
 
 use super::models::{
-    AgentEnrollmentToken, AgentStatus, AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset,
-    EnrolledAgent, JobStatus, NewFinding, Organization, Role, User,
+    compute_finding_fingerprint, AgentEnrollmentToken, AgentStatus, AssessmentComparison,
+    AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset, EnrolledAgent, FindingStatus,
+    FindingStatusHistory, JobStatus, ManagedFinding, NewFinding, Organization, ResolutionType,
+    Role, SecurityPostureSummary, SeverityBreakdown, SeverityChange, StatusBreakdown, User,
 };
 use super::{ControlPlaneStore, StoreError};
 
@@ -210,11 +212,59 @@ impl SqliteControlPlaneStore {
             CREATE INDEX IF NOT EXISTS idx_agents_auth_hash ON enrolled_agents(auth_token_hash);
             CREATE INDEX IF NOT EXISTS idx_agents_prev_auth_hash ON enrolled_agents(previous_auth_token_hash);
             CREATE INDEX IF NOT EXISTS idx_agent_tokens_lookup ON agent_enrollment_tokens(id, expires_at);
+
+            CREATE TABLE IF NOT EXISTS managed_findings (
+                id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL,
+                asset_id TEXT,
+                fingerprint TEXT NOT NULL,
+                rule_id TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                endpoint TEXT NOT NULL,
+                title TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                resolution_type TEXT,
+                first_observed_at TEXT NOT NULL,
+                last_observed_at TEXT NOT NULL,
+                first_job_id TEXT NOT NULL,
+                last_job_id TEXT NOT NULL,
+                occurrence_count INTEGER NOT NULL DEFAULT 1,
+                assigned_owner TEXT,
+                due_date TEXT,
+                remediation_notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(org_id, fingerprint),
+                FOREIGN KEY(org_id) REFERENCES organizations(id) ON DELETE CASCADE,
+                FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS finding_status_history (
+                id TEXT PRIMARY KEY,
+                finding_id TEXT NOT NULL,
+                old_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                resolution_type TEXT,
+                changed_by_user_id TEXT,
+                job_id TEXT,
+                comment TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(finding_id) REFERENCES managed_findings(id) ON DELETE CASCADE,
+                FOREIGN KEY(changed_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+                FOREIGN KEY(job_id) REFERENCES assessment_jobs(id) ON DELETE SET NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_managed_findings_org_status ON managed_findings(org_id, status);
+            CREATE INDEX IF NOT EXISTS idx_managed_findings_org_asset ON managed_findings(org_id, asset_id);
+            CREATE INDEX IF NOT EXISTS idx_managed_findings_org_sev ON managed_findings(org_id, severity);
+            CREATE INDEX IF NOT EXISTS idx_finding_history_finding ON finding_status_history(finding_id, created_at);
             ",
         )
         .map_err(|e| StoreError::Database(format!("schema migration failed: {e}")))?;
 
-        // Ensure columns exist on pre-existing assessment_jobs tables
+        // Ensure columns exist on pre-existing tables
         let _ = conn.execute(
             "ALTER TABLE assessment_jobs ADD COLUMN assigned_agent_id TEXT",
             [],
@@ -226,6 +276,22 @@ impl SqliteControlPlaneStore {
         let _ = conn.execute("ALTER TABLE assessment_jobs ADD COLUMN execution_source TEXT NOT NULL DEFAULT 'server'", []);
         let _ = conn.execute(
             "ALTER TABLE assessment_jobs ADD COLUMN rules_subset TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE assessment_jobs ADD COLUMN rules_evaluated TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE assessment_jobs ADD COLUMN engine_version TEXT NOT NULL DEFAULT '0.1.0-alpha.0'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE assessment_findings ADD COLUMN fingerprint TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE assessment_findings ADD COLUMN managed_finding_id TEXT",
             [],
         );
         let _ = conn.execute(
@@ -881,6 +947,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             lease_expires_at: None,
             execution_source: "server".to_string(),
             rules_subset: None,
+            rules_evaluated: None,
+            engine_version: "0.1.0-alpha.0".to_string(),
         })
     }
 
@@ -893,7 +961,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             .prepare(
                 "SELECT id, org_id, asset_id, target, assessment_type, profile, status,
                         summary_json, error_message, started_at, completed_at, created_at,
-                        assigned_agent_id, lease_expires_at, execution_source, rules_subset
+                        assigned_agent_id, lease_expires_at, execution_source, rules_subset,
+                        rules_evaluated, engine_version
                  FROM assessment_jobs WHERE org_id = ?1 AND id = ?2",
             )
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -917,6 +986,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                     row.get::<_, Option<String>>(13)?,
                     row.get::<_, Option<String>>(14)?,
                     row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
                 ))
             })
             .optional()
@@ -940,6 +1011,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                 lease_opt,
                 source_opt,
                 rules_opt,
+                eval_opt,
+                ver_opt,
             )) => {
                 let status = JobStatus::parse(&status_str).map_err(StoreError::Database)?;
                 Ok(Some(AssessmentJob {
@@ -987,6 +1060,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                         .transpose()?,
                     execution_source: source_opt.unwrap_or_else(|| "server".to_string()),
                     rules_subset: rules_opt,
+                    rules_evaluated: eval_opt,
+                    engine_version: ver_opt.unwrap_or_else(|| "0.1.0-alpha.0".to_string()),
                 }))
             }
             None => Ok(None),
@@ -1088,7 +1163,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             .prepare(
                 "SELECT id, org_id, asset_id, target, assessment_type, profile, status,
                         summary_json, error_message, started_at, completed_at, created_at,
-                        assigned_agent_id, lease_expires_at, execution_source, rules_subset
+                        assigned_agent_id, lease_expires_at, execution_source, rules_subset,
+                        rules_evaluated, engine_version
                  FROM assessment_jobs WHERE org_id = ?1 ORDER BY created_at DESC LIMIT ?2",
             )
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1112,6 +1188,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                     row.get::<_, Option<String>>(13)?,
                     row.get::<_, Option<String>>(14)?,
                     row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
                 ))
             })
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1135,6 +1213,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                 lease_opt,
                 source_opt,
                 rules_opt,
+                eval_opt,
+                ver_opt,
             ) = r.map_err(|e| StoreError::Database(e.to_string()))?;
             let status = JobStatus::parse(&status_str).map_err(StoreError::Database)?;
             jobs.push(AssessmentJob {
@@ -1181,6 +1261,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                     .transpose()?,
                 execution_source: source_opt.unwrap_or_else(|| "server".to_string()),
                 rules_subset: rules_opt,
+                rules_evaluated: eval_opt,
+                engine_version: ver_opt.unwrap_or_else(|| "0.1.0-alpha.0".to_string()),
             });
         }
         Ok(jobs)
@@ -1242,19 +1324,19 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
 
         let sql = match (job_id, min_severity) {
             (Some(_), Some(_)) => {
-                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at
+                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at, fingerprint, managed_finding_id
                  FROM assessment_findings WHERE org_id = ?1 AND job_id = ?2 AND severity = ?3 ORDER BY created_at DESC"
             }
             (Some(_), None) => {
-                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at
+                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at, fingerprint, managed_finding_id
                  FROM assessment_findings WHERE org_id = ?1 AND job_id = ?2 ORDER BY created_at DESC"
             }
             (None, Some(_)) => {
-                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at
+                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at, fingerprint, managed_finding_id
                  FROM assessment_findings WHERE org_id = ?1 AND severity = ?2 ORDER BY created_at DESC"
             }
             (None, None) => {
-                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at
+                "SELECT id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at, fingerprint, managed_finding_id
                  FROM assessment_findings WHERE org_id = ?1 ORDER BY created_at DESC"
             }
         };
@@ -1275,6 +1357,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             let evidence: String = row.get(8)?;
             let recommendation: String = row.get(9)?;
             let created_str: String = row.get(10)?;
+            let fingerprint: Option<String> = row.get(11)?;
+            let managed_id_str: Option<String> = row.get(12)?;
 
             let id = Uuid::parse_str(&id_str).map_err(|e| {
                 rusqlite::Error::FromSqlConversionFailure(
@@ -1306,6 +1390,16 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                         Box::new(e),
                     )
                 })?;
+            let managed_finding_id = managed_id_str
+                .map(|s| Uuid::parse_str(&s))
+                .transpose()
+                .map_err(|e| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        12,
+                        rusqlite::types::Type::Text,
+                        Box::new(e),
+                    )
+                })?;
 
             Ok(AssessmentFinding {
                 id,
@@ -1319,6 +1413,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                 evidence,
                 recommendation,
                 created_at,
+                fingerprint,
+                managed_finding_id,
             })
         };
 
@@ -2462,6 +2558,1263 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         }
 
         Ok(())
+    }
+
+    // --- Finding Lifecycle, Remediation & Posture (M7) ---
+    async fn record_job_findings_and_reconcile_lifecycle(
+        &self,
+        org_id: Uuid,
+        job_id: Uuid,
+        findings: &[NewFinding],
+        rules_evaluated: &[String],
+    ) -> Result<Vec<AssessmentFinding>, StoreError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // 1. Fetch job to know asset_id, target, and domain
+        let (asset_id_str, target, assessment_type): (Option<String>, String, String) = {
+            let mut stmt = tx
+                .prepare("SELECT asset_id, target, assessment_type FROM assessment_jobs WHERE org_id = ?1 AND id = ?2")
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            stmt.query_row(params![org_id.to_string(), job_id.to_string()], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .map_err(|_| StoreError::NotFound(format!("Job '{job_id}' not found")))?
+        };
+
+        let target_or_asset = asset_id_str.as_deref().unwrap_or(&target).to_string();
+        let domain = assessment_type;
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+
+        // 2. Update job's rules_evaluated and engine_version
+        let rules_eval_json = serde_json::to_string(rules_evaluated)
+            .map_err(|e| StoreError::Database(format!("JSON serialize error: {e}")))?;
+        tx.execute(
+            "UPDATE assessment_jobs SET rules_evaluated = ?1, engine_version = ?2 WHERE id = ?3 AND org_id = ?4",
+            params![
+                rules_eval_json,
+                "0.1.0-alpha.0",
+                job_id.to_string(),
+                org_id.to_string(),
+            ],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // 3. Insert/update findings & managed findings
+        let mut created_findings = Vec::with_capacity(findings.len());
+        let mut observed_fps = std::collections::HashSet::new();
+
+        for f in findings {
+            let fp = compute_finding_fingerprint(
+                org_id,
+                &target_or_asset,
+                &domain,
+                &f.rule_id,
+                &f.endpoint,
+            );
+            observed_fps.insert(fp.clone());
+
+            // Check if managed_finding already exists
+            let existing: Option<(String, String)> = {
+                let mut stmt = tx
+                    .prepare("SELECT id, status FROM managed_findings WHERE org_id = ?1 AND fingerprint = ?2")
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                stmt.query_row(params![org_id.to_string(), fp], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?
+            };
+
+            let managed_id_str = if let Some((m_id, status_str)) = existing {
+                let old_status = FindingStatus::parse(&status_str).map_err(StoreError::Database)?;
+                if old_status == FindingStatus::Resolved {
+                    // Reopen the finding
+                    tx.execute(
+                        "UPDATE managed_findings
+                         SET status = 'reopened', resolution_type = NULL, last_observed_at = ?1, last_job_id = ?2,
+                             occurrence_count = occurrence_count + 1, severity = ?3, confidence = ?4, title = ?5, updated_at = ?1
+                         WHERE id = ?6",
+                        params![
+                            now_str,
+                            job_id.to_string(),
+                            f.severity,
+                            f.confidence,
+                            f.title,
+                            m_id,
+                        ],
+                    )
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                    let hist_id = Uuid::new_v4().to_string();
+                    tx.execute(
+                        "INSERT INTO finding_status_history (id, finding_id, old_status, new_status, resolution_type, changed_by_user_id, job_id, comment, created_at)
+                         VALUES (?1, ?2, 'resolved', 'reopened', NULL, NULL, ?3, 'Reopened: observed in subsequent assessment', ?4)",
+                        params![
+                            hist_id,
+                            m_id,
+                            job_id.to_string(),
+                            now_str,
+                        ],
+                    )
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                } else {
+                    tx.execute(
+                        "UPDATE managed_findings
+                         SET last_observed_at = ?1, last_job_id = ?2, occurrence_count = occurrence_count + 1,
+                             severity = ?3, confidence = ?4, title = ?5, updated_at = ?1
+                         WHERE id = ?6",
+                        params![
+                            now_str,
+                            job_id.to_string(),
+                            f.severity,
+                            f.confidence,
+                            f.title,
+                            m_id,
+                        ],
+                    )
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                }
+                m_id
+            } else {
+                let m_id = Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO managed_findings (
+                        id, org_id, asset_id, fingerprint, rule_id, domain, endpoint, title, severity, confidence,
+                        status, resolution_type, first_observed_at, last_observed_at, first_job_id, last_job_id,
+                        occurrence_count, assigned_owner, due_date, remediation_notes, created_at, updated_at
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                        'open', NULL, ?11, ?11, ?12, ?12,
+                        1, NULL, NULL, NULL, ?11, ?11
+                    )",
+                    params![
+                        m_id,
+                        org_id.to_string(),
+                        asset_id_str,
+                        fp,
+                        f.rule_id,
+                        domain,
+                        f.endpoint,
+                        f.title,
+                        f.severity,
+                        f.confidence,
+                        now_str,
+                        job_id.to_string(),
+                    ],
+                )
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                let hist_id = Uuid::new_v4().to_string();
+                tx.execute(
+                    "INSERT INTO finding_status_history (id, finding_id, old_status, new_status, resolution_type, changed_by_user_id, job_id, comment, created_at)
+                     VALUES (?1, ?2, 'open', 'open', NULL, NULL, ?3, 'Initial discovery', ?4)",
+                    params![
+                        hist_id,
+                        m_id,
+                        job_id.to_string(),
+                        now_str,
+                    ],
+                )
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+                m_id
+            };
+
+            let finding_id = Uuid::new_v4();
+            let managed_finding_id = Uuid::parse_str(&managed_id_str)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            tx.execute(
+                "INSERT INTO assessment_findings (
+                    id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at, fingerprint, managed_finding_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                params![
+                    finding_id.to_string(),
+                    org_id.to_string(),
+                    job_id.to_string(),
+                    f.rule_id,
+                    f.severity,
+                    f.confidence,
+                    f.title,
+                    f.endpoint,
+                    f.evidence,
+                    f.recommendation,
+                    now_str,
+                    fp,
+                    managed_id_str,
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            created_findings.push(AssessmentFinding {
+                id: finding_id,
+                org_id,
+                job_id,
+                rule_id: f.rule_id.clone(),
+                severity: f.severity.clone(),
+                confidence: f.confidence.clone(),
+                title: f.title.clone(),
+                endpoint: f.endpoint.clone(),
+                evidence: f.evidence.clone(),
+                recommendation: f.recommendation.clone(),
+                created_at: now,
+                fingerprint: Some(fp),
+                managed_finding_id: Some(managed_finding_id),
+            });
+        }
+
+        // 4. Reconcile missing findings for verified remediation:
+        // Find all active managed findings for this target/asset and domain
+        let mut active_stmt = tx
+            .prepare(
+                "SELECT id, fingerprint, rule_id, status FROM managed_findings
+                 WHERE org_id = ?1 AND domain = ?2
+                   AND (
+                       (asset_id IS NOT NULL AND asset_id = ?3)
+                       OR (asset_id IS NULL AND ?3 IS NULL)
+                   )
+                   AND status IN ('open', 'acknowledged', 'in_progress', 'reopened')",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let active_rows = active_stmt
+            .query_map(params![org_id.to_string(), domain, asset_id_str], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut to_resolve = Vec::new();
+        for r in active_rows {
+            let (m_id, fp, r_id, status_str) =
+                r.map_err(|e| StoreError::Database(e.to_string()))?;
+            // If the rule was evaluated and finding was NOT observed, it is verified remediated!
+            if rules_evaluated.iter().any(|re| re == &r_id) && !observed_fps.contains(&fp) {
+                to_resolve.push((m_id, status_str));
+            }
+        }
+        drop(active_stmt);
+
+        for (m_id, old_status_str) in to_resolve {
+            tx.execute(
+                "UPDATE managed_findings
+                 SET status = 'resolved', resolution_type = 'verified_remediated', updated_at = ?1
+                 WHERE id = ?2",
+                params![now_str, m_id],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let hist_id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO finding_status_history (id, finding_id, old_status, new_status, resolution_type, changed_by_user_id, job_id, comment, created_at)
+                 VALUES (?1, ?2, ?3, 'resolved', 'verified_remediated', NULL, ?4, 'Verified remediated: rule was evaluated and finding was not observed', ?5)",
+                params![
+                    hist_id,
+                    m_id,
+                    old_status_str,
+                    job_id.to_string(),
+                    now_str,
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(created_findings)
+    }
+
+    async fn get_managed_finding(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+    ) -> Result<Option<ManagedFinding>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, org_id, asset_id, fingerprint, rule_id, domain, endpoint, title,
+                        severity, confidence, status, resolution_type, first_observed_at,
+                        last_observed_at, first_job_id, last_job_id, occurrence_count,
+                        assigned_owner, due_date, remediation_notes, created_at, updated_at
+                 FROM managed_findings WHERE org_id = ?1 AND id = ?2",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let row = stmt
+            .query_row(params![org_id.to_string(), finding_id.to_string()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, String>(12)?,
+                    r.get::<_, String>(13)?,
+                    r.get::<_, String>(14)?,
+                    r.get::<_, String>(15)?,
+                    r.get::<_, i32>(16)?,
+                    r.get::<_, Option<String>>(17)?,
+                    r.get::<_, Option<String>>(18)?,
+                    r.get::<_, Option<String>>(19)?,
+                    r.get::<_, String>(20)?,
+                    r.get::<_, String>(21)?,
+                ))
+            })
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let Some(t) = row else {
+            return Ok(None);
+        };
+
+        let id = Uuid::parse_str(&t.0).map_err(|e| StoreError::Database(e.to_string()))?;
+        let org_id = Uuid::parse_str(&t.1).map_err(|e| StoreError::Database(e.to_string()))?;
+        let asset_id =
+            t.2.map(|s| Uuid::parse_str(&s))
+                .transpose()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        let status = FindingStatus::parse(&t.10).map_err(StoreError::Database)?;
+        let resolution_type =
+            t.11.as_deref()
+                .map(ResolutionType::parse)
+                .transpose()
+                .map_err(StoreError::Database)?;
+        let first_observed_at = DateTime::parse_from_rfc3339(&t.12)
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let last_observed_at = DateTime::parse_from_rfc3339(&t.13)
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let first_job_id =
+            Uuid::parse_str(&t.14).map_err(|e| StoreError::Database(e.to_string()))?;
+        let last_job_id =
+            Uuid::parse_str(&t.15).map_err(|e| StoreError::Database(e.to_string()))?;
+        let due_date =
+            t.18.as_deref()
+                .map(DateTime::parse_from_rfc3339)
+                .transpose()
+                .map_err(|e| StoreError::Database(e.to_string()))?
+                .map(|d| d.with_timezone(&Utc));
+        let created_at = DateTime::parse_from_rfc3339(&t.20)
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let updated_at = DateTime::parse_from_rfc3339(&t.21)
+            .map(|d| d.with_timezone(&Utc))
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(Some(ManagedFinding {
+            id,
+            org_id,
+            asset_id,
+            fingerprint: t.3,
+            rule_id: t.4,
+            domain: t.5,
+            endpoint: t.6,
+            title: t.7,
+            severity: t.8,
+            confidence: t.9,
+            status,
+            resolution_type,
+            first_observed_at,
+            last_observed_at,
+            first_job_id,
+            last_job_id,
+            occurrence_count: t.16,
+            assigned_owner: t.17,
+            due_date,
+            remediation_notes: t.19,
+            created_at,
+            updated_at,
+        }))
+    }
+
+    async fn list_managed_findings(
+        &self,
+        org_id: Uuid,
+        asset_id: Option<Uuid>,
+        status: Option<FindingStatus>,
+        severity: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<ManagedFinding>, usize), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut where_clauses = vec!["org_id = ?1".to_string()];
+        let mut param_values: Vec<rusqlite::types::Value> = vec![org_id.to_string().into()];
+
+        if let Some(a_id) = asset_id {
+            where_clauses.push(format!("asset_id = ?{}", param_values.len() + 1));
+            param_values.push(a_id.to_string().into());
+        }
+
+        if let Some(st) = status {
+            where_clauses.push(format!("status = ?{}", param_values.len() + 1));
+            param_values.push(st.as_str().to_string().into());
+        }
+
+        if let Some(sev) = severity {
+            where_clauses.push(format!("LOWER(severity) = ?{}", param_values.len() + 1));
+            param_values.push(sev.to_lowercase().into());
+        }
+
+        let where_sql = where_clauses.join(" AND ");
+        let count_sql = format!("SELECT COUNT(*) FROM managed_findings WHERE {where_sql}");
+
+        let total_count: i64 = {
+            let mut stmt = conn
+                .prepare(&count_sql)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let params_ref: Vec<&dyn rusqlite::ToSql> = param_values
+                .iter()
+                .map(|v| v as &dyn rusqlite::ToSql)
+                .collect();
+            stmt.query_row(rusqlite::params_from_iter(params_ref), |r| r.get(0))
+                .map_err(|e| StoreError::Database(e.to_string()))?
+        };
+
+        let select_sql = format!(
+            "SELECT id, org_id, asset_id, fingerprint, rule_id, domain, endpoint, title,
+                    severity, confidence, status, resolution_type, first_observed_at,
+                    last_observed_at, first_job_id, last_job_id, occurrence_count,
+                    assigned_owner, due_date, remediation_notes, created_at, updated_at
+             FROM managed_findings
+             WHERE {where_sql}
+             ORDER BY last_observed_at DESC, created_at DESC
+             LIMIT ?{} OFFSET ?{}",
+            param_values.len() + 1,
+            param_values.len() + 2,
+        );
+
+        param_values.push((limit as i64).into());
+        param_values.push((offset as i64).into());
+
+        let mut stmt = conn
+            .prepare(&select_sql)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let params_ref: Vec<&dyn rusqlite::ToSql> = param_values
+            .iter()
+            .map(|v| v as &dyn rusqlite::ToSql)
+            .collect();
+
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params_ref), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, String>(12)?,
+                    r.get::<_, String>(13)?,
+                    r.get::<_, String>(14)?,
+                    r.get::<_, String>(15)?,
+                    r.get::<_, i32>(16)?,
+                    r.get::<_, Option<String>>(17)?,
+                    r.get::<_, Option<String>>(18)?,
+                    r.get::<_, Option<String>>(19)?,
+                    r.get::<_, String>(20)?,
+                    r.get::<_, String>(21)?,
+                ))
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut findings = Vec::new();
+        for item in rows {
+            let t = item.map_err(|e| StoreError::Database(e.to_string()))?;
+            let id = Uuid::parse_str(&t.0).map_err(|e| StoreError::Database(e.to_string()))?;
+            let org_id = Uuid::parse_str(&t.1).map_err(|e| StoreError::Database(e.to_string()))?;
+            let asset_id =
+                t.2.map(|s| Uuid::parse_str(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+            let status = FindingStatus::parse(&t.10).map_err(StoreError::Database)?;
+            let resolution_type =
+                t.11.as_deref()
+                    .map(ResolutionType::parse)
+                    .transpose()
+                    .map_err(StoreError::Database)?;
+            let first_observed_at = DateTime::parse_from_rfc3339(&t.12)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let last_observed_at = DateTime::parse_from_rfc3339(&t.13)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let first_job_id =
+                Uuid::parse_str(&t.14).map_err(|e| StoreError::Database(e.to_string()))?;
+            let last_job_id =
+                Uuid::parse_str(&t.15).map_err(|e| StoreError::Database(e.to_string()))?;
+            let due_date =
+                t.18.as_deref()
+                    .map(DateTime::parse_from_rfc3339)
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?
+                    .map(|d| d.with_timezone(&Utc));
+            let created_at = DateTime::parse_from_rfc3339(&t.20)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let updated_at = DateTime::parse_from_rfc3339(&t.21)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            findings.push(ManagedFinding {
+                id,
+                org_id,
+                asset_id,
+                fingerprint: t.3,
+                rule_id: t.4,
+                domain: t.5,
+                endpoint: t.6,
+                title: t.7,
+                severity: t.8,
+                confidence: t.9,
+                status,
+                resolution_type,
+                first_observed_at,
+                last_observed_at,
+                first_job_id,
+                last_job_id,
+                occurrence_count: t.16,
+                assigned_owner: t.17,
+                due_date,
+                remediation_notes: t.19,
+                created_at,
+                updated_at,
+            });
+        }
+
+        Ok((findings, total_count as usize))
+    }
+
+    async fn update_managed_finding_status(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+        user_id: Option<Uuid>,
+        new_status: FindingStatus,
+        resolution_type: Option<ResolutionType>,
+        comment: Option<&str>,
+    ) -> Result<ManagedFinding, StoreError> {
+        let existing = self
+            .get_managed_finding(org_id, finding_id)
+            .await?
+            .ok_or_else(|| {
+                StoreError::NotFound(format!("Managed finding '{finding_id}' not found"))
+            })?;
+
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+
+        {
+            let mut conn = self
+                .conn
+                .lock()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let tx = conn
+                .transaction()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            tx.execute(
+                "UPDATE managed_findings
+                 SET status = ?1, resolution_type = ?2, updated_at = ?3
+                 WHERE id = ?4 AND org_id = ?5",
+                params![
+                    new_status.as_str(),
+                    resolution_type.map(ResolutionType::as_str),
+                    now_str,
+                    finding_id.to_string(),
+                    org_id.to_string(),
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let hist_id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO finding_status_history (
+                    id, finding_id, old_status, new_status, resolution_type, changed_by_user_id, job_id, comment, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8)",
+                params![
+                    hist_id,
+                    finding_id.to_string(),
+                    existing.status.as_str(),
+                    new_status.as_str(),
+                    resolution_type.map(ResolutionType::as_str),
+                    user_id.map(|u| u.to_string()),
+                    comment,
+                    now_str,
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            tx.commit()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+
+        let mut updated = existing;
+        updated.status = new_status;
+        updated.resolution_type = resolution_type;
+        updated.updated_at = now;
+
+        Ok(updated)
+    }
+
+    async fn assign_managed_finding_owner(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+        assigned_owner: Option<&str>,
+        due_date: Option<DateTime<Utc>>,
+        remediation_notes: Option<&str>,
+    ) -> Result<ManagedFinding, StoreError> {
+        let existing = self
+            .get_managed_finding(org_id, finding_id)
+            .await?
+            .ok_or_else(|| {
+                StoreError::NotFound(format!("Managed finding '{finding_id}' not found"))
+            })?;
+
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        let due_date_str = due_date.map(|d| d.to_rfc3339());
+
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            conn.execute(
+                "UPDATE managed_findings
+                 SET assigned_owner = ?1, due_date = ?2, remediation_notes = ?3, updated_at = ?4
+                 WHERE id = ?5 AND org_id = ?6",
+                params![
+                    assigned_owner,
+                    due_date_str,
+                    remediation_notes,
+                    now_str,
+                    finding_id.to_string(),
+                    org_id.to_string(),
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+
+        let mut updated = existing;
+        updated.assigned_owner = assigned_owner.map(str::to_string);
+        updated.due_date = due_date;
+        updated.remediation_notes = remediation_notes.map(str::to_string);
+        updated.updated_at = now;
+
+        Ok(updated)
+    }
+
+    async fn get_finding_status_history(
+        &self,
+        org_id: Uuid,
+        finding_id: Uuid,
+    ) -> Result<Vec<FindingStatusHistory>, StoreError> {
+        // Enforce tenant isolation: finding must exist within this org
+        let _finding = self
+            .get_managed_finding(org_id, finding_id)
+            .await?
+            .ok_or_else(|| {
+                StoreError::NotFound(format!("Managed finding '{finding_id}' not found"))
+            })?;
+
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, finding_id, old_status, new_status, resolution_type, changed_by_user_id, job_id, comment, created_at
+                 FROM finding_status_history WHERE finding_id = ?1 ORDER BY created_at ASC",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![finding_id.to_string()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, String>(8)?,
+                ))
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut history = Vec::new();
+        for item in rows {
+            let (h_id, f_id, old_st, new_st, res_ty, u_id, j_id, cmt, cr_at) =
+                item.map_err(|e| StoreError::Database(e.to_string()))?;
+            history.push(FindingStatusHistory {
+                id: Uuid::parse_str(&h_id).map_err(|e| StoreError::Database(e.to_string()))?,
+                finding_id: Uuid::parse_str(&f_id)
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                old_status: FindingStatus::parse(&old_st).map_err(StoreError::Database)?,
+                new_status: FindingStatus::parse(&new_st).map_err(StoreError::Database)?,
+                resolution_type: res_ty
+                    .as_deref()
+                    .map(ResolutionType::parse)
+                    .transpose()
+                    .map_err(StoreError::Database)?,
+                changed_by_user_id: u_id
+                    .map(|s| Uuid::parse_str(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                job_id: j_id
+                    .map(|s| Uuid::parse_str(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                comment: cmt,
+                created_at: DateTime::parse_from_rfc3339(&cr_at)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+            });
+        }
+
+        Ok(history)
+    }
+
+    async fn compare_assessments(
+        &self,
+        org_id: Uuid,
+        base_job_id: Uuid,
+        target_job_id: Uuid,
+    ) -> Result<AssessmentComparison, StoreError> {
+        let base_job = self
+            .get_job(org_id, base_job_id)
+            .await?
+            .ok_or_else(|| StoreError::NotFound(format!("Base job '{base_job_id}' not found")))?;
+
+        let target_job = self.get_job(org_id, target_job_id).await?.ok_or_else(|| {
+            StoreError::NotFound(format!("Target job '{target_job_id}' not found"))
+        })?;
+
+        let base_rules_evaluated: Vec<String> = base_job
+            .rules_evaluated
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+
+        let target_rules_evaluated: Vec<String> = target_job
+            .rules_evaluated
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+
+        let mut rules_added = Vec::new();
+        for r in &target_rules_evaluated {
+            if !base_rules_evaluated.contains(r) {
+                rules_added.push(r.clone());
+            }
+        }
+
+        let mut rules_removed = Vec::new();
+        for r in &base_rules_evaluated {
+            if !target_rules_evaluated.contains(r) {
+                rules_removed.push(r.clone());
+            }
+        }
+
+        let coverage_ratio = if base_rules_evaluated.is_empty() {
+            1.0
+        } else {
+            let common_rules = base_rules_evaluated
+                .iter()
+                .filter(|r| target_rules_evaluated.contains(r))
+                .count();
+            common_rules as f64 / base_rules_evaluated.len() as f64
+        };
+
+        let coverage_notes = if coverage_ratio >= 1.0 {
+            "Full rule coverage verified relative to base assessment.".to_string()
+        } else {
+            format!(
+                "Coverage dropped to {:.1}%: {} rule(s) evaluated in base were omitted in target assessment.",
+                coverage_ratio * 100.0,
+                rules_removed.len()
+            )
+        };
+
+        let base_findings = self.list_findings(org_id, Some(base_job_id), None).await?;
+        let target_findings = self
+            .list_findings(org_id, Some(target_job_id), None)
+            .await?;
+
+        let base_map: std::collections::HashMap<String, &AssessmentFinding> = base_findings
+            .iter()
+            .filter_map(|f| f.fingerprint.as_ref().map(|fp| (fp.clone(), f)))
+            .collect();
+
+        let target_map: std::collections::HashMap<String, &AssessmentFinding> = target_findings
+            .iter()
+            .filter_map(|f| f.fingerprint.as_ref().map(|fp| (fp.clone(), f)))
+            .collect();
+
+        let mut new_findings = Vec::new();
+        let mut reopened_findings = Vec::new();
+        let mut persistent_findings = Vec::new();
+        let mut severity_changes = Vec::new();
+
+        for tf in &target_findings {
+            let Some(ref tf_fp) = tf.fingerprint else {
+                new_findings.push(tf.clone());
+                continue;
+            };
+
+            if let Some(bf) = base_map.get(tf_fp) {
+                persistent_findings.push(tf.clone());
+                if bf.severity != tf.severity {
+                    severity_changes.push(SeverityChange {
+                        fingerprint: tf_fp.clone(),
+                        rule_id: tf.rule_id.clone(),
+                        endpoint: tf.endpoint.clone(),
+                        base_severity: bf.severity.clone(),
+                        target_severity: tf.severity.clone(),
+                    });
+                }
+            } else {
+                // Not in base. Is it reopened or brand new?
+                let is_reopened = if let Some(m_id) = tf.managed_finding_id {
+                    if let Ok(Some(mf)) = self.get_managed_finding(org_id, m_id).await {
+                        mf.status == FindingStatus::Reopened || mf.occurrence_count > 1
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if is_reopened {
+                    reopened_findings.push(tf.clone());
+                } else {
+                    new_findings.push(tf.clone());
+                }
+            }
+        }
+
+        let mut resolved_findings = Vec::new();
+        let mut unverified_omissions = Vec::new();
+
+        for bf in &base_findings {
+            let Some(ref bf_fp) = bf.fingerprint else {
+                continue;
+            };
+
+            if !target_map.contains_key(bf_fp) {
+                // Base finding did not appear in target scan!
+                // Was its rule evaluated in target?
+                if target_rules_evaluated.contains(&bf.rule_id) {
+                    if let Some(m_id) = bf.managed_finding_id {
+                        if let Ok(Some(mf)) = self.get_managed_finding(org_id, m_id).await {
+                            resolved_findings.push(mf);
+                        }
+                    }
+                } else {
+                    // Rule was omitted: unverified omission
+                    unverified_omissions.push(bf.clone());
+                }
+            }
+        }
+
+        Ok(AssessmentComparison {
+            base_job_id,
+            target_job_id,
+            asset_id: target_job.asset_id,
+            target: target_job.target,
+            base_created_at: base_job.created_at,
+            target_created_at: target_job.created_at,
+            base_rules_evaluated,
+            target_rules_evaluated,
+            rules_added,
+            rules_removed,
+            coverage_ratio,
+            coverage_notes,
+            new_findings,
+            persistent_findings,
+            resolved_findings,
+            unverified_omissions,
+            reopened_findings,
+            severity_changes,
+        })
+    }
+
+    async fn get_security_posture_summary(
+        &self,
+        org_id: Uuid,
+        asset_id: Option<Uuid>,
+    ) -> Result<SecurityPostureSummary, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // Total assets
+        let total_assets: usize = if let Some(a_id) = asset_id {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM assets WHERE org_id = ?1 AND id = ?2",
+                    params![org_id.to_string(), a_id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            count as usize
+        } else {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM assets WHERE org_id = ?1",
+                    params![org_id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            count as usize
+        };
+
+        // Assessed assets (distinct assets with at least one completed job)
+        let assessed_assets: usize = if let Some(a_id) = asset_id {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT asset_id) FROM assessment_jobs WHERE org_id = ?1 AND asset_id = ?2 AND status = 'completed'",
+                    params![org_id.to_string(), a_id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            count as usize
+        } else {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(DISTINCT asset_id) FROM assessment_jobs WHERE org_id = ?1 AND asset_id IS NOT NULL AND status = 'completed'",
+                    params![org_id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            count as usize
+        };
+
+        // Stale assets: completed assessment > 30 days ago, or created > 30 days ago with 0 completed assessments
+        let thirty_days_ago = Utc::now() - Duration::days(30);
+        let thirty_days_str = thirty_days_ago.to_rfc3339();
+
+        let stale_assets: usize = if let Some(a_id) = asset_id {
+            let is_stale: bool = conn
+                .query_row(
+                    "SELECT CASE
+                        WHEN MAX(j.completed_at) IS NOT NULL AND MAX(j.completed_at) < ?1 THEN 1
+                        WHEN MAX(j.completed_at) IS NULL AND a.created_at < ?1 THEN 1
+                        ELSE 0
+                     END
+                     FROM assets a
+                     LEFT JOIN assessment_jobs j ON j.asset_id = a.id AND j.status = 'completed'
+                     WHERE a.org_id = ?2 AND a.id = ?3
+                     GROUP BY a.id",
+                    params![thirty_days_str, org_id.to_string(), a_id.to_string()],
+                    |r| r.get::<_, i64>(0).map(|v| v == 1),
+                )
+                .unwrap_or(false);
+            usize::from(is_stale)
+        } else {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM (
+                        SELECT a.id
+                        FROM assets a
+                        LEFT JOIN assessment_jobs j ON j.asset_id = a.id AND j.status = 'completed'
+                        WHERE a.org_id = ?1
+                        GROUP BY a.id
+                        HAVING (MAX(j.completed_at) IS NOT NULL AND MAX(j.completed_at) < ?2)
+                            OR (MAX(j.completed_at) IS NULL AND a.created_at < ?2)
+                    )",
+                    params![org_id.to_string(), thirty_days_str],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            count as usize
+        };
+
+        // Managed findings counts
+        let mut sev_breakdown = SeverityBreakdown::default();
+        let mut status_breakdown = StatusBreakdown::default();
+        let mut verified_remediations_count = 0;
+        let mut manual_resolutions_count = 0;
+        let mut accepted_risks_count = 0;
+        let mut total_active_findings = 0;
+
+        let asset_id_str = asset_id.map(|u| u.to_string());
+        let sql = "SELECT severity, status, resolution_type FROM managed_findings WHERE org_id = ?1 AND (?2 IS NULL OR asset_id = ?2)";
+
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![org_id.to_string(), asset_id_str], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        for r in rows {
+            let (sev, st_str, res_ty) = r.map_err(|e| StoreError::Database(e.to_string()))?;
+            let status = FindingStatus::parse(&st_str).unwrap_or(FindingStatus::Open);
+
+            match status {
+                FindingStatus::Open => status_breakdown.open += 1,
+                FindingStatus::Acknowledged => status_breakdown.acknowledged += 1,
+                FindingStatus::InProgress => status_breakdown.in_progress += 1,
+                FindingStatus::Resolved => status_breakdown.resolved += 1,
+                FindingStatus::AcceptedRisk => status_breakdown.accepted_risk += 1,
+                FindingStatus::Reopened => status_breakdown.reopened += 1,
+            }
+
+            if status != FindingStatus::Resolved && status != FindingStatus::AcceptedRisk {
+                total_active_findings += 1;
+                match sev.to_lowercase().as_str() {
+                    "critical" => sev_breakdown.critical += 1,
+                    "high" => sev_breakdown.high += 1,
+                    "medium" => sev_breakdown.medium += 1,
+                    "low" => sev_breakdown.low += 1,
+                    _ => sev_breakdown.info += 1,
+                }
+            }
+
+            if status == FindingStatus::AcceptedRisk {
+                accepted_risks_count += 1;
+            }
+
+            if let Some(res) = res_ty {
+                if res == "verified_remediated" {
+                    verified_remediations_count += 1;
+                } else if res == "manually_resolved" {
+                    manual_resolutions_count += 1;
+                }
+            }
+        }
+
+        // Assessment job statistics
+        let (completed_count, failed_count) = if let Some(a_id) = asset_id {
+            let c: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM assessment_jobs WHERE org_id = ?1 AND asset_id = ?2 AND status = 'completed'",
+                params![org_id.to_string(), a_id.to_string()],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            let f: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM assessment_jobs WHERE org_id = ?1 AND asset_id = ?2 AND status = 'failed'",
+                params![org_id.to_string(), a_id.to_string()],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            (c as usize, f as usize)
+        } else {
+            let c: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM assessment_jobs WHERE org_id = ?1 AND status = 'completed'",
+                params![org_id.to_string()],
+                |r| r.get(0),
+            ).unwrap_or(0);
+            let f: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM assessment_jobs WHERE org_id = ?1 AND status = 'failed'",
+                    params![org_id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            (c as usize, f as usize)
+        };
+
+        Ok(SecurityPostureSummary {
+            org_id,
+            calculated_at: Utc::now(),
+            total_assets,
+            assessed_assets,
+            stale_assets,
+            total_active_findings,
+            findings_by_severity: sev_breakdown,
+            findings_by_status: status_breakdown,
+            verified_remediations_count,
+            manual_resolutions_count,
+            accepted_risks_count,
+            total_assessments_completed: completed_count,
+            total_assessments_failed: failed_count,
+        })
+    }
+
+    async fn list_assessment_history(
+        &self,
+        org_id: Uuid,
+        asset_id: Option<Uuid>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(Vec<AssessmentJob>, usize), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let total_count: i64 = if let Some(a_id) = asset_id {
+            conn.query_row(
+                "SELECT COUNT(*) FROM assessment_jobs WHERE org_id = ?1 AND asset_id = ?2",
+                params![org_id.to_string(), a_id.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*) FROM assessment_jobs WHERE org_id = ?1",
+                params![org_id.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?
+        };
+
+        let asset_id_str = asset_id.map(|u| u.to_string());
+        let sql = "SELECT id, org_id, asset_id, target, assessment_type, profile, status, summary_json, error_message, started_at, completed_at, created_at, assigned_agent_id, lease_expires_at, execution_source, rules_subset, rules_evaluated, engine_version
+             FROM assessment_jobs WHERE org_id = ?1 AND (?2 IS NULL OR asset_id = ?2) ORDER BY created_at DESC LIMIT ?3 OFFSET ?4";
+
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let limit_i64 = limit as i64;
+        let offset_i64 = offset as i64;
+
+        let rows = stmt
+            .query_map(
+                params![org_id.to_string(), asset_id_str, limit_i64, offset_i64],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, Option<String>>(7)?,
+                        r.get::<_, Option<String>>(8)?,
+                        r.get::<_, Option<String>>(9)?,
+                        r.get::<_, Option<String>>(10)?,
+                        r.get::<_, String>(11)?,
+                        r.get::<_, Option<String>>(12)?,
+                        r.get::<_, Option<String>>(13)?,
+                        r.get::<_, Option<String>>(14)?,
+                        r.get::<_, Option<String>>(15)?,
+                        r.get::<_, Option<String>>(16)?,
+                        r.get::<_, Option<String>>(17)?,
+                    ))
+                },
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut jobs = Vec::new();
+        for r in rows {
+            let (
+                id_str,
+                org_str,
+                asset_opt,
+                target,
+                a_type,
+                prof,
+                status_str,
+                sum_opt,
+                err_opt,
+                start_opt,
+                end_opt,
+                created_str,
+                agent_opt,
+                lease_opt,
+                source_opt,
+                rules_opt,
+                eval_opt,
+                ver_opt,
+            ) = r.map_err(|e| StoreError::Database(e.to_string()))?;
+            let status = JobStatus::parse(&status_str).map_err(StoreError::Database)?;
+            jobs.push(AssessmentJob {
+                id: Uuid::parse_str(&id_str).map_err(|e| StoreError::Database(e.to_string()))?,
+                org_id: Uuid::parse_str(&org_str)
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                asset_id: asset_opt
+                    .map(|s| Uuid::parse_str(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                target,
+                assessment_type: a_type,
+                profile: prof,
+                status,
+                summary_json: sum_opt,
+                error_message: err_opt,
+                started_at: start_opt
+                    .as_deref()
+                    .map(DateTime::parse_from_rfc3339)
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?
+                    .map(|d| d.with_timezone(&Utc)),
+                completed_at: end_opt
+                    .as_deref()
+                    .map(DateTime::parse_from_rfc3339)
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?
+                    .map(|d| d.with_timezone(&Utc)),
+                created_at: DateTime::parse_from_rfc3339(&created_str)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                assigned_agent_id: agent_opt
+                    .map(|s| Uuid::parse_str(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                lease_expires_at: lease_opt
+                    .as_deref()
+                    .map(DateTime::parse_from_rfc3339)
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?
+                    .map(|d| d.with_timezone(&Utc)),
+                execution_source: source_opt.unwrap_or_else(|| "server".to_string()),
+                rules_subset: rules_opt,
+                rules_evaluated: eval_opt,
+                engine_version: ver_opt.unwrap_or_else(|| "0.1.0-alpha.0".to_string()),
+            });
+        }
+
+        Ok((jobs, total_count as usize))
     }
 }
 
