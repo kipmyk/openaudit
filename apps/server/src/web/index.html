@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAudit Control Plane</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Unauthenticated Views Container -->
+  <div id="auth-container" class="auth-wrapper" style="display: none;">
+    <!-- Initial Bootstrap View -->
+    <div id="view-bootstrap" class="auth-card" style="display: none;">
+      <div class="auth-header">
+        <div class="auth-logo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        </div>
+        <h1>Initialize OpenAudit</h1>
+        <p class="auth-desc">Bootstrap your primary organization and first administrator account.</p>
+      </div>
+      <form id="form-bootstrap" class="form-vertical">
+        <div class="form-group">
+          <label for="bootstrap-org-name">Organization Name</label>
+          <input type="text" id="bootstrap-org-name" class="input-text" placeholder="e.g. Acme Security Operations" required>
+        </div>
+        <div class="form-group">
+          <label for="bootstrap-org-slug">Organization Slug</label>
+          <input type="text" id="bootstrap-org-slug" class="input-text" placeholder="e.g. acme-sec" required pattern="[a-z0-9\-]+">
+          <span class="field-hint">Alphanumeric lowercase and hyphens only.</span>
+        </div>
+        <div class="form-group">
+          <label for="bootstrap-admin-name">Administrator Name</label>
+          <input type="text" id="bootstrap-admin-name" class="input-text" placeholder="e.g. Security Lead" required>
+        </div>
+        <div class="form-group">
+          <label for="bootstrap-admin-email">Admin Email</label>
+          <input type="email" id="bootstrap-admin-email" class="input-text" placeholder="admin@acme.sec" required>
+        </div>
+        <div class="form-group">
+          <label for="bootstrap-admin-password">Password</label>
+          <input type="password" id="bootstrap-admin-password" class="input-text" placeholder="Minimum 8 characters" required minlength="8">
+        </div>
+        <button type="submit" id="btn-submit-bootstrap" class="btn btn-primary btn-block">Initialize Control Plane</button>
+      </form>
+      <div class="auth-footer">
+        <span>Already initialized? <a href="#login" id="link-goto-login">Sign in</a></span>
+      </div>
+    </div>
+
+    <!-- Sign In View -->
+    <div id="view-login" class="auth-card" style="display: none;">
+      <div class="auth-header">
+        <div class="auth-logo">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        </div>
+        <h1>Sign In to OpenAudit</h1>
+        <p class="auth-desc">Enter your tenant credentials to access the control plane.</p>
+      </div>
+      <form id="form-login" class="form-vertical">
+        <div class="form-group">
+          <label for="login-email">Email Address</label>
+          <input type="email" id="login-email" class="input-text" placeholder="admin@corp.com" required>
+        </div>
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" class="input-text" placeholder="••••••••" required>
+        </div>
+        <button type="submit" id="btn-submit-login" class="btn btn-primary btn-block">Sign In</button>
+      </form>
+      <div class="auth-footer">
+        <span>First time setup? <a href="#setup" id="link-goto-setup">Initialize control plane</a></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Authenticated Application Shell -->
+  <div id="app-shell" class="app-layout" style="display: none;">
+    <!-- Top Global Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="header-brand">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+          <span class="brand-name">OpenAudit</span>
+          <span class="badge badge-subtle">v0.1.0-alpha</span>
+        </div>
+        <div class="tenant-badge" id="header-tenant-name">Tenant: Acme</div>
+      </div>
+      <div class="header-right">
+        <button type="button" class="btn btn-sm btn-primary" id="btn-header-quick-scan">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          New Assessment
+        </button>
+        <button type="button" class="btn btn-sm btn-subtle" id="btn-toggle-theme" title="Toggle Theme" aria-label="Toggle theme">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+        </button>
+        <div class="user-pill">
+          <span id="header-user-email" class="user-email">user@domain.com</span>
+          <span id="header-user-role" class="badge badge-info">Admin</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline" id="btn-logout" title="Sign Out">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+          Sign Out
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace Area -->
+    <div class="workspace-body">
+      <!-- Navigation Sidebar -->
+      <nav class="sidebar" aria-label="Main Navigation">
+        <div class="nav-section-label">Operations</div>
+        <ul class="nav-list">
+          <li>
+            <a href="#posture" class="nav-item active" data-view="posture">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"></rect><rect x="14" y="3" width="7" height="5"></rect><rect x="14" y="12" width="7" height="9"></rect><rect x="3" y="16" width="7" height="5"></rect></svg>
+              <span>Posture Overview</span>
+            </a>
+          </li>
+          <li>
+            <a href="#assets" class="nav-item" data-view="assets">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+              <span>Asset Inventory</span>
+            </a>
+          </li>
+          <li>
+            <a href="#assessments" class="nav-item" data-view="assessments">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+              <span>Assessments & Scans</span>
+            </a>
+          </li>
+          <li>
+            <a href="#findings" class="nav-item" data-view="findings">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+              <span>Findings & Lifecycle</span>
+            </a>
+          </li>
+          <li>
+            <a href="#compare" class="nav-item" data-view="compare">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+              <span>Coverage Comparison</span>
+            </a>
+          </li>
+        </ul>
+
+        <div class="nav-section-label">Fleet & Administration</div>
+        <ul class="nav-list">
+          <li>
+            <a href="#agents" class="nav-item" data-view="agents">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+              <span>Enrolled Agents</span>
+            </a>
+          </li>
+          <li id="nav-item-users-wrapper">
+            <a href="#users" class="nav-item" data-view="users">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+              <span>Users & RBAC</span>
+            </a>
+          </li>
+        </ul>
+      </nav>
+
+      <!-- Main Content Views -->
+      <main class="content-viewport" id="content-viewport">
+        <!-- 1. Posture Overview View -->
+        <section id="view-posture" class="view-panel active">
+          <div class="view-header">
+            <div>
+              <h2>Security Posture Intelligence</h2>
+              <p class="view-subtext">Tenant security baseline, active exposures, and verified remediation health.</p>
+            </div>
+            <div class="header-actions">
+              <button type="button" class="btn btn-outline btn-sm" id="btn-refresh-posture">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          <!-- Top Metric KPI Grid -->
+          <div class="kpi-grid">
+            <div class="kpi-card">
+              <div class="kpi-title">Active Security Findings</div>
+              <div class="kpi-value" id="kpi-total-findings">0</div>
+              <div class="kpi-breakdown" id="kpi-severity-badges">
+                <span class="badge badge-critical" id="kpi-crit">0 Crit</span>
+                <span class="badge badge-high" id="kpi-high">0 High</span>
+                <span class="badge badge-medium" id="kpi-med">0 Med</span>
+                <span class="badge badge-low" id="kpi-low">0 Low</span>
+              </div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-title">Verified Remediations</div>
+              <div class="kpi-value text-green" id="kpi-verified-remediations">0</div>
+              <div class="kpi-subtext">Evaluated absent via follow-up scans</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-title">Asset Coverage</div>
+              <div class="kpi-value" id="kpi-asset-coverage">0 / 0</div>
+              <div class="kpi-subtext" id="kpi-asset-percent">0% assessed</div>
+            </div>
+
+            <div class="kpi-card">
+              <div class="kpi-title">Stale Assets (>30d)</div>
+              <div class="kpi-value text-amber" id="kpi-stale-assets">0</div>
+              <div class="kpi-subtext">Require immediate re-assessment</div>
+            </div>
+          </div>
+
+          <!-- Posture Breakdown Details -->
+          <div class="dashboard-split">
+            <div class="card">
+              <div class="card-header">
+                <h3>Finding Status Breakdown</h3>
+              </div>
+              <div class="card-body">
+                <div class="status-summary-table-wrapper">
+                  <table class="data-table" id="table-status-breakdown">
+                    <thead>
+                      <tr>
+                        <th>Status</th>
+                        <th>Active Count</th>
+                        <th>Policy Meaning</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><span class="badge badge-critical">Open</span></td>
+                        <td id="stat-count-open">0</td>
+                        <td>Active finding awaiting triage or assignment.</td>
+                      </tr>
+                      <tr>
+                        <td><span class="badge badge-amber">Acknowledged</span></td>
+                        <td id="stat-count-ack">0</td>
+                        <td>Assessed and confirmed by security team.</td>
+                      </tr>
+                      <tr>
+                        <td><span class="badge badge-blue">In Progress</span></td>
+                        <td id="stat-count-inprog">0</td>
+                        <td>Active remediation in development/ops.</td>
+                      </tr>
+                      <tr>
+                        <td><span class="badge badge-green">Resolved</span></td>
+                        <td id="stat-count-res">0</td>
+                        <td>Verified absent or manually confirmed.</td>
+                      </tr>
+                      <tr>
+                        <td><span class="badge badge-subtle">Accepted Risk</span></td>
+                        <td id="stat-count-accepted">0</td>
+                        <td>Documented business risk tolerance.</td>
+                      </tr>
+                      <tr>
+                        <td><span class="badge badge-high">Reopened</span></td>
+                        <td id="stat-count-reopened">0</td>
+                        <td>Previously resolved finding detected again.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3>Assessment Engine Health</h3>
+              </div>
+              <div class="card-body">
+                <div class="stat-row">
+                  <span class="stat-label">Total Completed Scans</span>
+                  <span class="stat-number text-green" id="stat-jobs-completed">0</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">Total Failed Scans</span>
+                  <span class="stat-number text-red" id="stat-jobs-failed">0</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">Manual Resolutions</span>
+                  <span class="stat-number" id="stat-manual-resolutions">0</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">Engine Core</span>
+                  <span class="badge badge-subtle">Dimension 4 Authority</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 2. Asset Inventory View -->
+        <section id="view-assets" class="view-panel">
+          <div class="view-header">
+            <div>
+              <h2>Asset Inventory</h2>
+              <p class="view-subtext">Authoritative registry of target servers, endpoints, and cloud perimeter surfaces.</p>
+            </div>
+            <div class="header-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-open-create-asset-modal">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                Register Asset
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-responsive">
+              <table class="data-table" id="table-assets">
+                <thead>
+                  <tr>
+                    <th>Asset Name</th>
+                    <th>Type</th>
+                    <th>Target Address / FQDN</th>
+                    <th>Criticality</th>
+                    <th>Registered</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-assets">
+                  <tr><td colspan="6" class="table-empty">Loading asset inventory...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 3. Assessments & Scans View -->
+        <section id="view-assessments" class="view-panel">
+          <div class="view-header">
+            <div>
+              <h2>Assessments & Scans</h2>
+              <p class="view-subtext">Execution history, live scan statuses, progress tracking, and report exports.</p>
+            </div>
+            <div class="header-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-open-launch-assessment-modal">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                Launch Assessment
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-responsive">
+              <table class="data-table" id="table-assessments">
+                <thead>
+                  <tr>
+                    <th>Target</th>
+                    <th>Type</th>
+                    <th>Profile</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Completed</th>
+                    <th>Findings</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-assessments">
+                  <tr><td colspan="8" class="table-empty">Loading assessment history...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 4. Findings & Lifecycle View -->
+        <section id="view-findings" class="view-panel">
+          <div class="view-header">
+            <div>
+              <h2>Security Findings & Remediation</h2>
+              <p class="view-subtext">Invariant-fingerprinted vulnerability tracking, status transitions, and audit trails.</p>
+            </div>
+            <div class="header-actions filter-bar">
+              <select id="filter-finding-severity" class="select-sm">
+                <option value="">All Severities</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+                <option value="info">Info</option>
+              </select>
+              <select id="filter-finding-status" class="select-sm">
+                <option value="">All Statuses</option>
+                <option value="open">Open</option>
+                <option value="acknowledged">Acknowledged</option>
+                <option value="in_progress">In Progress</option>
+                <option value="resolved">Resolved</option>
+                <option value="accepted_risk">Accepted Risk</option>
+                <option value="reopened">Reopened</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-responsive">
+              <table class="data-table" id="table-findings">
+                <thead>
+                  <tr>
+                    <th>Severity</th>
+                    <th>Rule ID & Title</th>
+                    <th>Target / Endpoint</th>
+                    <th>Status</th>
+                    <th>Occurrences</th>
+                    <th>Assignee</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-findings">
+                  <tr><td colspan="7" class="table-empty">Loading managed security findings...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 5. Coverage Comparison View -->
+        <section id="view-compare" class="view-panel">
+          <div class="view-header">
+            <div>
+              <h2>Coverage-Aware Assessment Comparison</h2>
+              <p class="view-subtext">Reconcile security posture delta between baseline and target scans with verified remediation detection.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-body">
+              <form id="form-compare" class="compare-selector-form">
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label for="compare-base-job">Baseline Assessment (Base)</label>
+                    <select id="compare-base-job" class="select-text" required></select>
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="compare-target-job">Follow-Up Assessment (Target)</label>
+                    <select id="compare-target-job" class="select-text" required></select>
+                  </div>
+                  <div class="form-group flex-none" style="align-self: flex-end;">
+                    <button type="submit" class="btn btn-primary" id="btn-run-compare">Compare Assessments</button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Comparison Result Section (Hidden until compared) -->
+          <div id="compare-results-container" style="display: none; margin-top: 1.5rem;">
+            <!-- Coverage Ratio Banner -->
+            <div class="card mb-4" id="compare-coverage-card">
+              <div class="card-body">
+                <div class="coverage-header">
+                  <div>
+                    <h3 id="compare-coverage-title">Coverage Ratio: 100.0%</h3>
+                    <p id="compare-coverage-notes" class="text-muted">Full rule coverage verified relative to base assessment.</p>
+                  </div>
+                  <div class="coverage-bar-wrapper">
+                    <div class="coverage-progress-bar" id="compare-progress-fill" style="width: 100%;"></div>
+                  </div>
+                </div>
+                <div class="rule-diff-chips" id="compare-rule-diffs"></div>
+              </div>
+            </div>
+
+            <!-- Categorized Comparison Findings -->
+            <div class="compare-sections-grid">
+              <div class="card">
+                <div class="card-header bg-green-subtle">
+                  <h3>Verified Remediations (<span id="count-comp-resolved">0</span>)</h3>
+                </div>
+                <div class="card-body" id="list-comp-resolved">
+                  <div class="empty-text">Zero verified remediations.</div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header bg-amber-subtle">
+                  <h3>Unverified Omissions (<span id="count-comp-omitted">0</span>)</h3>
+                </div>
+                <div class="card-body" id="list-comp-omitted">
+                  <div class="empty-text">Zero omitted findings.</div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header bg-red-subtle">
+                  <h3>New Findings (<span id="count-comp-new">0</span>)</h3>
+                </div>
+                <div class="card-body" id="list-comp-new">
+                  <div class="empty-text">Zero new findings discovered.</div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header bg-subtle">
+                  <h3>Persistent Findings (<span id="count-comp-persistent">0</span>)</h3>
+                </div>
+                <div class="card-body" id="list-comp-persistent">
+                  <div class="empty-text">Zero persistent findings.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 6. Agent Fleet View -->
+        <section id="view-agents" class="view-panel">
+          <div class="view-header">
+            <div>
+              <h2>Enrolled Agent Nodes</h2>
+              <p class="view-subtext">Distributed agent daemon fleet, mutual authentication tokens, and heartbeat telemetry.</p>
+            </div>
+            <div class="header-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-open-issue-token-modal">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                Issue Enrollment Token
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-responsive">
+              <table class="data-table" id="table-agents">
+                <thead>
+                  <tr>
+                    <th>Machine ID</th>
+                    <th>Hostname</th>
+                    <th>Version</th>
+                    <th>Status</th>
+                    <th>Last Heartbeat</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-agents">
+                  <tr><td colspan="6" class="table-empty">Loading enrolled agent nodes...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 7. Users & RBAC View -->
+        <section id="view-users" class="view-panel">
+          <div class="view-header">
+            <div>
+              <h2>Team & Role-Based Access Control</h2>
+              <p class="view-subtext">Manage tenant users with Admin, Auditor, and Viewer permission boundaries.</p>
+            </div>
+            <div class="header-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btn-open-create-user-modal">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                Invite User
+              </button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="table-responsive">
+              <table class="data-table" id="table-users">
+                <thead>
+                  <tr>
+                    <th>Full Name</th>
+                    <th>Email Address</th>
+                    <th>Role</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody id="tbody-users">
+                  <tr><td colspan="4" class="table-empty">Loading team users...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- MODALS CONTAINER -->
+
+  <!-- Modal: Register Asset -->
+  <div id="modal-create-asset" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Register New Asset</h3>
+        <button type="button" class="modal-close" data-close="modal-create-asset">&times;</button>
+      </div>
+      <form id="form-create-asset" class="form-vertical">
+        <div class="form-group">
+          <label for="asset-name">Asset Name</label>
+          <input type="text" id="asset-name" class="input-text" placeholder="e.g. Primary Web Gateway" required>
+        </div>
+        <div class="form-group">
+          <label for="asset-type">Asset Type</label>
+          <select id="asset-type" class="select-text" required>
+            <option value="server">Server (Host)</option>
+            <option value="network">Network Device</option>
+            <option value="cloud">Cloud Resource</option>
+            <option value="webapp">Web Application</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="asset-target">Target IP / FQDN / Endpoint</label>
+          <input type="text" id="asset-target" class="input-text" placeholder="e.g. 192.168.1.100 or api.corp.com" required>
+        </div>
+        <div class="form-group">
+          <label for="asset-criticality">Business Criticality</label>
+          <select id="asset-criticality" class="select-text" required>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium" selected>Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-outline" data-close="modal-create-asset">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Asset</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Launch Assessment -->
+  <div id="modal-launch-assessment" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Launch Security Assessment</h3>
+        <button type="button" class="modal-close" data-close="modal-launch-assessment">&times;</button>
+      </div>
+      <form id="form-launch-assessment" class="form-vertical">
+        <div class="form-group">
+          <label for="scan-asset-select">Associated Asset (Optional)</label>
+          <select id="scan-asset-select" class="select-text">
+            <option value="">-- Custom Target (No registered asset) --</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="scan-target">Target Destination / IP / FQDN</label>
+          <input type="text" id="scan-target" class="input-text" placeholder="e.g. api.acme.sec or 10.0.0.1" required>
+        </div>
+        <div class="form-group">
+          <label for="scan-type">Assessment Engine Domain</label>
+          <select id="scan-type" class="select-text" required>
+            <option value="perimeter" selected>Perimeter Assessment (TLS, Exposure & HTTP Headers)</option>
+            <option value="local_host">Local Host Audit</option>
+            <option value="remote_network">Remote Network Scan</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="scan-profile">Security Profile</label>
+          <select id="scan-profile" class="select-text" required>
+            <option value="standard" selected>Standard (Comprehensive Controls)</option>
+            <option value="quick">Quick (Essential Perimeter Checks)</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-outline" data-close="modal-launch-assessment">Cancel</button>
+          <button type="submit" class="btn btn-primary">Start Assessment</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal: Issue Enrollment Token -->
+  <div id="modal-issue-token" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Issue Agent Enrollment Token</h3>
+        <button type="button" class="modal-close" data-close="modal-issue-token">&times;</button>
+      </div>
+      <div id="token-form-container">
+        <form id="form-issue-token" class="form-vertical">
+          <div class="form-group">
+            <label for="token-machine-id">Pinned Machine ID (Optional)</label>
+            <input type="text" id="token-machine-id" class="input-text" placeholder="Leave empty for open node enrollment">
+            <span class="field-hint">Pins token to a specific hardware or agent identifier.</span>
+          </div>
+          <div class="form-group">
+            <label for="token-lifetime">Token Lifetime</label>
+            <select id="token-lifetime" class="select-text">
+              <option value="3600">1 Hour</option>
+              <option value="86400" selected>24 Hours</option>
+              <option value="604800">7 Days</option>
+            </select>
+          </div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-outline" data-close="modal-issue-token">Cancel</button>
+            <button type="submit" class="btn btn-primary">Generate Token</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Token Result Display (Hidden initially) -->
+      <div id="token-result-container" style="display: none;">
+        <div class="alert alert-warning">
+          <strong>Important:</strong> Save the enrollment command now. The secret token cannot be viewed again.
+        </div>
+        <div class="form-group">
+          <label>Agent CLI Enrollment Snippet</label>
+          <pre class="code-box"><code id="token-snippet-code"></code></pre>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-primary" data-close="modal-issue-token">Done</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Invite User -->
+  <div id="modal-create-user" class="modal-overlay" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Invite Team Member</h3>
+        <button type="button" class="modal-close" data-close="modal-create-user">&times;</button>
+      </div>
+      <form id="form-create-user" class="form-vertical">
+        <div class="form-group">
+          <label for="user-full-name">Full Name</label>
+          <input type="text" id="user-full-name" class="input-text" placeholder="e.g. Jane Doe" required>
+        </div>
+        <div class="form-group">
+          <label for="user-email">Email Address</label>
+          <input type="email" id="user-email" class="input-text" placeholder="jane@corp.com" required>
+        </div>
+        <div class="form-group">
+          <label for="user-password">Initial Password</label>
+          <input type="password" id="user-password" class="input-text" placeholder="Minimum 8 characters" required minlength="8">
+        </div>
+        <div class="form-group">
+          <label for="user-role">Assigned Role</label>
+          <select id="user-role" class="select-text" required>
+            <option value="viewer">Viewer (Read-Only Posture & Reports)</option>
+            <option value="auditor" selected>Auditor (Create Scans & Manage Findings)</option>
+            <option value="admin">Administrator (Full Access & User Management)</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-outline" data-close="modal-create-user">Cancel</button>
+          <button type="submit" class="btn btn-primary">Create User</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Slide-In Drawer: Finding Details & Lifecycle Management -->
+  <div id="drawer-finding-detail" class="drawer-overlay" style="display: none;">
+    <div class="drawer-panel">
+      <div class="drawer-header">
+        <div>
+          <span class="badge" id="drawer-finding-severity">Critical</span>
+          <span class="badge" id="drawer-finding-status">Open</span>
+          <span class="badge badge-subtle" id="drawer-finding-occurrences">1 occurrence</span>
+        </div>
+        <button type="button" class="drawer-close" id="btn-close-drawer">&times;</button>
+      </div>
+      <div class="drawer-body">
+        <h3 id="drawer-finding-title" class="finding-drawer-title">Finding Title</h3>
+
+        <div class="finding-meta-grid">
+          <div>
+            <span class="meta-label">Rule ID</span>
+            <code id="drawer-finding-rule">rule.id</code>
+          </div>
+          <div>
+            <span class="meta-label">Target / Endpoint</span>
+            <code id="drawer-finding-endpoint">10.0.0.1:443</code>
+          </div>
+          <div class="grid-span-2">
+            <span class="meta-label">Deterministic Fingerprint</span>
+            <code id="drawer-finding-fp" class="fp-code">sha256</code>
+          </div>
+        </div>
+
+        <div class="drawer-section">
+          <h4>Technical Evidence</h4>
+          <pre class="evidence-box"><code id="drawer-finding-evidence">No evidence captured.</code></pre>
+        </div>
+
+        <div class="drawer-section">
+          <h4>Remediation Guidance</h4>
+          <div id="drawer-finding-remediation" class="remediation-box">No guidance provided.</div>
+        </div>
+
+        <hr class="drawer-divider">
+
+        <!-- Status Transition Action -->
+        <div class="drawer-section">
+          <h4>Lifecycle State Transition</h4>
+          <form id="form-update-status" class="form-vertical">
+            <input type="hidden" id="finding-status-id">
+            <div class="form-group">
+              <label for="select-new-status">New Lifecycle State</label>
+              <select id="select-new-status" class="select-text" required>
+                <option value="open">Open</option>
+                <option value="acknowledged">Acknowledged</option>
+                <option value="in_progress">In Progress</option>
+                <option value="resolved">Resolved</option>
+                <option value="accepted_risk">Accepted Risk</option>
+              </select>
+            </div>
+            <div class="form-group" id="group-resolution-type" style="display: none;">
+              <label for="select-resolution-type">Resolution Classification</label>
+              <select id="select-resolution-type" class="select-text">
+                <option value="manually_resolved">Manually Resolved (Operator Confirmed)</option>
+                <option value="verified_remediated">Verified Remediated (Evaluated via Scan)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="status-transition-comment">Transition Reason / Comment</label>
+              <input type="text" id="status-transition-comment" class="input-text" placeholder="Document reason for audit trail">
+            </div>
+            <button type="submit" class="btn btn-sm btn-primary">Update Finding Status</button>
+          </form>
+        </div>
+
+        <hr class="drawer-divider">
+
+        <!-- Ownership Assignment Form -->
+        <div class="drawer-section">
+          <h4>Remediation Assignment</h4>
+          <form id="form-assign-owner" class="form-vertical">
+            <input type="hidden" id="finding-assign-id">
+            <div class="form-group">
+              <label for="assign-owner-name">Assigned Engineer / Team</label>
+              <input type="text" id="assign-owner-name" class="input-text" placeholder="e.g. devops-sec@corp.com">
+            </div>
+            <div class="form-group">
+              <label for="assign-due-date">Remediation Due Date</label>
+              <input type="date" id="assign-due-date" class="input-text">
+            </div>
+            <div class="form-group">
+              <label for="assign-notes">Internal Remediation Notes</label>
+              <textarea id="assign-notes" class="input-textarea" rows="2" placeholder="Ticket references, patch PRs, or notes"></textarea>
+            </div>
+            <button type="submit" class="btn btn-sm btn-outline">Save Assignment</button>
+          </form>
+        </div>
+
+        <hr class="drawer-divider">
+
+        <!-- Status History Audit Trail Timeline -->
+        <div class="drawer-section">
+          <h4>Lifecycle Audit Trail</h4>
+          <div id="drawer-history-timeline" class="timeline-container">
+            <div class="empty-text">Loading audit trail...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -4,6 +4,7 @@ pub mod health;
 pub mod openapi;
 pub mod v1;
 pub mod version;
+pub mod web;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
@@ -56,6 +57,11 @@ pub fn create_router(state: Arc<AppState>) -> Router {
         .route("/api/openapi.json", get(openapi::openapi_json_handler))
         // Version 1 API
         .nest("/api/v1", v1_router)
+        // Web UI Assets & SPA Fallback (Milestone 8)
+        .route("/", get(web::index_handler))
+        .route("/app.css", get(web::css_handler))
+        .route("/app.js", get(web::js_handler))
+        .fallback(web::fallback_handler)
         // Global Middleware
         .layer(TraceLayer::new_for_http())
         .layer(cors)
