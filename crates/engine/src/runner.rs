@@ -3,7 +3,8 @@
 use std::time::Instant;
 
 use openaudit_core::{
-    Asset, AssetId, AssetType, Evidence, EvidencePayload, Finding, OrganizationId, ScanSummary,
+    AssessmentType, Asset, AssetId, AssetType, Evidence, EvidencePayload, Finding, OrganizationId,
+    ScanSummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +18,7 @@ use crate::platform::{
     PlatformFamily, PlatformInfo,
 };
 use crate::profile::AuditProfile;
-use crate::rule::builtin::default_linux_rules;
-use crate::rule::Rule;
+use crate::rule::{all_builtin_rules, Rule};
 
 /// An individual finding paired with its sanitized, size-bounded evidence record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +52,9 @@ pub struct AuditReport {
     pub summary: ScanSummary,
     /// Execution duration in milliseconds.
     pub duration_ms: u64,
+    /// Classification of the assessment boundary and methodology.
+    #[serde(default)]
+    pub assessment_type: AssessmentType,
 }
 
 /// Audit execution engine coordinating telemetry collection and rule evaluation.
@@ -76,7 +79,7 @@ impl Default for AuditEngine<RealFileSystem, RealCommandRunner> {
         Self {
             fs: RealFileSystem,
             runner: RealCommandRunner,
-            rules: default_linux_rules(),
+            rules: all_builtin_rules(),
         }
     }
 }
@@ -265,6 +268,7 @@ impl<FS: FileSystem + Clone + 'static, CR: CommandRunner + Clone + 'static> Audi
             check_statuses,
             summary,
             duration_ms,
+            assessment_type: AssessmentType::LocalHostAssessment,
         })
     }
 }
@@ -272,6 +276,7 @@ impl<FS: FileSystem + Clone + 'static, CR: CommandRunner + Clone + 'static> Audi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rule::builtin::default_linux_rules;
 
     #[derive(Debug, Clone, Copy)]
     struct MockAuditFs;

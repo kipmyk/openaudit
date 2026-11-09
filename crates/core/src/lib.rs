@@ -23,7 +23,7 @@ pub use error::DomainError;
 pub use evidence::{Evidence, EvidencePayload, EvidenceType, MAX_EVIDENCE_SIZE_BYTES};
 pub use finding::{Finding, FindingStatus, Fingerprint};
 pub use id::{AgentId, AssetId, EvidenceId, FindingId, OrganizationId, ScanId, ScanJobId};
-pub use scan::{JobStatus, Scan, ScanJob, ScanStatus, ScanSummary, TriggerType};
+pub use scan::{AssessmentType, JobStatus, Scan, ScanJob, ScanStatus, ScanSummary, TriggerType};
 pub use severity::Severity;
 
 /// Returns the current version of the OpenAudit core domain library.

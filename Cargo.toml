@@ -6,6 +6,7 @@ members = [
     "apps/server",
     "apps/cli",
     "apps/agent",
+    "apps/desktop",
 ]
 
 [workspace.package]

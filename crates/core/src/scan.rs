@@ -8,6 +8,47 @@ use crate::error::DomainError;
 use crate::id::{AssetId, OrganizationId, ScanId, ScanJobId};
 use crate::severity::Severity;
 
+/// Classification of the assessment boundary and execution methodology.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssessmentType {
+    /// In-process evaluation of local operating system controls, users, services, and kernel configuration.
+    #[default]
+    LocalHostAssessment,
+    /// Agentless, non-destructive network evaluation of observable services, open ports, TLS, and HTTP headers.
+    RemoteNetworkAssessment,
+    /// Remote operating system assessment performed over an authorized connection (e.g. `SSH` or `WinRM`).
+    AuthenticatedRemoteHostAssessment,
+    /// Continuous or scheduled host assessment executed locally by an enrolled, attested OpenAudit agent.
+    EnrolledAgentHostAssessment,
+}
+
+impl AssessmentType {
+    /// Returns the canonical human-readable display name for this assessment type.
+    #[must_use]
+    pub const fn display_name(&self) -> &'static str {
+        match self {
+            Self::LocalHostAssessment => "Local Host Assessment",
+            Self::RemoteNetworkAssessment => "Remote Network Assessment",
+            Self::AuthenticatedRemoteHostAssessment => "Authenticated Remote Host Assessment",
+            Self::EnrolledAgentHostAssessment => "Enrolled Agent Host Assessment",
+        }
+    }
+
+    /// Returns whether this assessment type inspects internal operating system configurations.
+    ///
+    /// An IP address or agentless network assessment can never inspect internal OS settings.
+    #[must_use]
+    pub const fn provides_operating_system_audit(&self) -> bool {
+        match self {
+            Self::LocalHostAssessment
+            | Self::AuthenticatedRemoteHostAssessment
+            | Self::EnrolledAgentHostAssessment => true,
+            Self::RemoteNetworkAssessment => false,
+        }
+    }
+}
+
 /// How the scan was initiated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -306,5 +347,33 @@ mod tests {
         assert_eq!(job.attempts, 0);
         assert_eq!(job.max_attempts, 3);
         assert!(job.started_at.is_none());
+    }
+
+    #[test]
+    fn test_assessment_type_invariants_and_serde() {
+        let local = AssessmentType::LocalHostAssessment;
+        assert_eq!(local.display_name(), "Local Host Assessment");
+        assert!(local.provides_operating_system_audit());
+
+        let remote_net = AssessmentType::RemoteNetworkAssessment;
+        assert_eq!(remote_net.display_name(), "Remote Network Assessment");
+        assert!(!remote_net.provides_operating_system_audit());
+
+        let remote_auth = AssessmentType::AuthenticatedRemoteHostAssessment;
+        assert_eq!(
+            remote_auth.display_name(),
+            "Authenticated Remote Host Assessment"
+        );
+        assert!(remote_auth.provides_operating_system_audit());
+
+        let agent = AssessmentType::EnrolledAgentHostAssessment;
+        assert_eq!(agent.display_name(), "Enrolled Agent Host Assessment");
+        assert!(agent.provides_operating_system_audit());
+
+        // Serde roundtrip
+        let serialized = serde_json::to_string(&remote_net).expect("serialize");
+        assert_eq!(serialized, "\"remote_network_assessment\"");
+        let deserialized: AssessmentType = serde_json::from_str(&serialized).expect("deserialize");
+        assert_eq!(deserialized, remote_net);
     }
 }
