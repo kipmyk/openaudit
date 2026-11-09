@@ -3,6 +3,7 @@
 //! Network perimeter scanning foundation providing canonical target parsing,
 //! scope authorization, SSRF protection, and pinned DNS resolution.
 
+pub mod assessment;
 pub mod error;
 pub mod http;
 pub mod pinned;
@@ -14,6 +15,10 @@ pub mod service;
 pub mod target;
 pub mod tls;
 
+pub use assessment::{
+    DiscoveredEndpointService, NetworkAssessmentReport, NetworkFindingSeverity,
+    PerimeterAssessConfig, PerimeterAssessor, PerimeterProfile, UnifiedNetworkFinding,
+};
 pub use error::NetworkError;
 pub use http::{
     HttpAssessConfig, HttpCookie, HttpFinding, HttpFindingSeverity, HttpPostureAssessment,
