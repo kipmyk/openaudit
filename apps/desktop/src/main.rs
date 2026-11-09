@@ -242,24 +242,49 @@ fn run_desktop_app() -> Result<ExitCode, Box<dyn std::error::Error>> {
                     "clipboard_copy" => {
                         if let Some(text) = parsed["text"].as_str() {
                             use std::io::Write;
-                            if let Ok(mut child) = Command::new("pbcopy")
+                            // Enforce fixed path to system binary and bounded input size
+                            let pbcopy_path = if std::path::Path::new("/usr/bin/pbcopy").exists() {
+                                "/usr/bin/pbcopy"
+                            } else {
+                                "pbcopy"
+                            };
+                            let bounded_text = if text.len() > 1024 * 1024 {
+                                &text[..1024 * 1024]
+                            } else {
+                                text
+                            };
+                            if let Ok(mut child) = Command::new(pbcopy_path)
                                 .stdin(std::process::Stdio::piped())
                                 .spawn()
                             {
                                 if let Some(mut stdin) = child.stdin.take() {
-                                    let _ = stdin.write_all(text.as_bytes());
+                                    let _ = stdin.write_all(bounded_text.as_bytes());
                                 }
                                 let _ = child.wait();
                             }
                         }
                     }
                     "clipboard_paste" => {
-                        if let Ok(output) = Command::new("pbpaste").output() {
-                            let text = String::from_utf8_lossy(&output.stdout).to_string();
-                            if let Ok(json_text) = serde_json::to_string(&text) {
-                                let _ = webview.evaluate_script(&format!(
-                                    "window.onNativeClipboardPaste({json_text});"
-                                ));
+                        let pbpaste_path = if std::path::Path::new("/usr/bin/pbpaste").exists() {
+                            "/usr/bin/pbpaste"
+                        } else {
+                            "pbpaste"
+                        };
+                        if let Ok(output) = Command::new(pbpaste_path).output() {
+                            if output.status.success() {
+                                // Strictly limit read buffer to prevent resource exhaustion
+                                let max_bytes = 1024 * 1024;
+                                let slice = if output.stdout.len() > max_bytes {
+                                    &output.stdout[..max_bytes]
+                                } else {
+                                    &output.stdout[..]
+                                };
+                                let text = String::from_utf8_lossy(slice).to_string();
+                                if let Ok(json_text) = serde_json::to_string(&text) {
+                                    let _ = webview.evaluate_script(&format!(
+                                        "window.onNativeClipboardPaste({json_text});"
+                                    ));
+                                }
                             }
                         }
                     }
