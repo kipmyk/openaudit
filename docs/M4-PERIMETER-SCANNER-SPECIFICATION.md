@@ -214,3 +214,4 @@ Prior to declaring M4 complete, the implementation must pass:
 3. **Controlled Local Lab Probes:** Verification against local mock TCP/TLS servers with predictable open, closed, and timeout states.
 4. **CLI Headless Verification:** `openaudit-cli scan remote <target>` executes without desktop or browser dependencies.
 5. **Desktop UI Verification:** Target selection, profile picking, authorization confirmation, live progress, and report export working end to end.
+
