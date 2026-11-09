@@ -286,15 +286,16 @@
           </div>
 
           <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 16px;">
-            <button class="btn btn-primary" onclick="showRemoteScanNotice()">
+            <button class="btn" onclick="showRemoteScanNotice()" style="cursor: pointer;">
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10"/>
                 <line x1="12" y1="8" x2="12" y2="12"/>
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
-              Inspect Remote Target
+              Inspect Remote Target (Planned for M4)
             </button>
-            <span style="font-size: 11px; color: var(--text-muted);">Non-destructive probes &bull; Anti-SSRF enforcement &bull; Rate-limited</span>
+            <span class="badge" style="background: var(--bg-subtle); color: var(--accent-blue); border: 1px solid var(--border-light);">SCHEDULED FOR MILESTONE 4</span>
+            <span style="font-size: 11px; color: var(--text-muted); margin-left: 4px;">Anti-SSRF &bull; Rate-limited &bull; Non-destructive</span>
           </div>
 
           <div class="weight-row boost" style="cursor: default;">

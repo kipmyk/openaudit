@@ -712,6 +712,20 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// Keyboard Shortcuts for Accessibility & Navigation
+document.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey) {
+    if (e.key === '1') { e.preventDefault(); showTab('overview'); }
+    else if (e.key === '2') { e.preventDefault(); showTab('remote'); }
+    else if (e.key === '3') { e.preventDefault(); showTab('enrolled'); }
+    else if (e.key === '4') { e.preventDefault(); showTab('findings'); }
+    else if (e.key === '5') { e.preventDefault(); showTab('rules'); }
+    else if (e.key === '6') { e.preventDefault(); showTab('report'); }
+    else if (e.key === '7') { e.preventDefault(); showTab('settings'); }
+    else if (e.key.toLowerCase() === 'r') { e.preventDefault(); runAudit(); }
+  }
+});
+
 // Initial Bootstrapping
 function bootstrap() {
   try {

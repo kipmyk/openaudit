@@ -1,7 +1,7 @@
 //! # Headless CLI Isolation & Architecture Regression Tests
 //!
 //! Validates that `openaudit-cli` remains a strictly headless, standalone binary
-//! completely isolated from graphical/desktop frameworks (Tao, Wry, Tauri, WebKit, GTK, X11).
+//! completely isolated from graphical/desktop frameworks (Tao, Wry, Tauri, `WebKit`, GTK, X11).
 
 use std::fs;
 use std::path::PathBuf;
@@ -96,7 +96,7 @@ fn test_cli_runs_headlessly_without_display_environment() {
 }
 
 /// Verifies that the CLI's HTML report generator produces a self-contained, standalone
-/// HTML document that does not require WebKit, network fetching, or graphical execution.
+/// HTML document that does not require `WebKit`, network fetching, or graphical execution.
 #[test]
 fn test_cli_html_report_is_self_contained_and_headless() {
     let org_id = OrganizationId::from_seed(b"openaudit:headless:report-org");
@@ -130,26 +130,26 @@ fn test_server_auditing_rule_coverage_and_invariants() {
     );
 
     // Verify Linux server rules exist
-    let linux_rules: Vec<_> = rules
+    let linux_rule_count = rules
         .iter()
         .filter(|r| r.target_platforms().contains(&PlatformFamily::Linux))
-        .collect();
-    assert!(linux_rules.len() >= 20, "Must contain Linux server rules");
+        .count();
+    assert!(linux_rule_count >= 20, "Must contain Linux server rules");
 
     // Verify Windows server rules exist
-    let windows_rules: Vec<_> = rules
+    let windows_rule_count = rules
         .iter()
         .filter(|r| r.target_platforms().contains(&PlatformFamily::Windows))
-        .collect();
+        .count();
     assert!(
-        windows_rules.len() >= 12,
+        windows_rule_count >= 12,
         "Must contain Windows server rules"
     );
 
     // Verify macOS rules exist
-    let macos_rules: Vec<_> = rules
+    let macos_rule_count = rules
         .iter()
         .filter(|r| r.target_platforms().contains(&PlatformFamily::MacOS))
-        .collect();
-    assert!(macos_rules.len() >= 11, "Must contain macOS rules");
+        .count();
+    assert!(macos_rule_count >= 11, "Must contain macOS rules");
 }
