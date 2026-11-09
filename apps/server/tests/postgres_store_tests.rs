@@ -19,7 +19,9 @@ use chrono::{Duration, Utc};
 use std::env;
 use uuid::Uuid;
 
-use openaudit_server::store::models::{AgentStatus, JobStatus, NewFinding, Role};
+use openaudit_server::store::models::{
+    AgentStatus, FindingStatus, JobStatus, NewFinding, ResolutionType, Role,
+};
 use openaudit_server::store::postgres::PostgresControlPlaneStore;
 use openaudit_server::store::{ControlPlaneStore, StoreError};
 
@@ -373,4 +375,143 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
         resolved_old_after_hb.is_none(),
         "Old credential must be invalidated after heartbeat in PG"
     );
+}
+
+#[tokio::test]
+async fn test_postgres_m7_finding_lifecycle_and_posture() {
+    let Some(pg_url) = get_postgres_url() else {
+        return;
+    };
+
+    let Ok(store) = PostgresControlPlaneStore::connect(&pg_url).await else {
+        return;
+    };
+
+    // Ensure migration 003 applied
+    store
+        .migrate()
+        .await
+        .expect("Migration 003 must be applied in PG");
+
+    let org = store
+        .create_organization(&format!("pg-m7-{}", Uuid::new_v4()), "PG M7 Corp")
+        .await
+        .unwrap();
+
+    let asset = store
+        .create_asset(org.id, "Prod API", "server", "api.prod.pg", "critical")
+        .await
+        .unwrap();
+
+    let job1 = store
+        .create_job(org.id, Some(asset.id), "api.prod.pg", "perimeter", "std")
+        .await
+        .unwrap();
+
+    let finding_tls = NewFinding {
+        rule_id: "tls.cert.expired".into(),
+        severity: "critical".into(),
+        confidence: "Confirmed".into(),
+        title: "Expired Cert".into(),
+        endpoint: "443/tcp".into(),
+        evidence: "Cert expired yesterday".into(),
+        recommendation: "Renew cert".into(),
+    };
+    let finding_hsts = NewFinding {
+        rule_id: "http.headers.hsts".into(),
+        severity: "high".into(),
+        confidence: "Confirmed".into(),
+        title: "Missing HSTS".into(),
+        endpoint: "https://api.prod.pg/".into(),
+        evidence: "No HSTS header".into(),
+        recommendation: "Add Strict-Transport-Security".into(),
+    };
+
+    let base_rules = vec![
+        "tls.cert.expired".to_string(),
+        "http.headers.hsts".to_string(),
+    ];
+    let created = store
+        .record_job_findings_and_reconcile_lifecycle(
+            org.id,
+            job1.id,
+            &[finding_tls.clone(), finding_hsts],
+            &base_rules,
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.len(), 2);
+    let tls_managed_id = created[0].managed_finding_id.unwrap();
+    let hsts_managed_id = created[1].managed_finding_id.unwrap();
+
+    // Verify initial managed finding in Postgres
+    let managed_tls = store
+        .get_managed_finding(org.id, tls_managed_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(managed_tls.status, FindingStatus::Open);
+    assert_eq!(managed_tls.occurrence_count, 1);
+
+    // Job 2: verified remediation of TLS, but HSTS was omitted from evaluation
+    let job2 = store
+        .create_job(
+            org.id,
+            Some(asset.id),
+            "api.prod.pg",
+            "perimeter",
+            "tls_only",
+        )
+        .await
+        .unwrap();
+    let scan2_rules = vec!["tls.cert.expired".to_string()];
+    let created2 = store
+        .record_job_findings_and_reconcile_lifecycle(org.id, job2.id, &[], &scan2_rules)
+        .await
+        .unwrap();
+    assert!(created2.is_empty());
+
+    // In Postgres: TLS cert finding is VerifiedRemediated
+    let resolved_tls = store
+        .get_managed_finding(org.id, tls_managed_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved_tls.status, FindingStatus::Resolved);
+    assert_eq!(
+        resolved_tls.resolution_type,
+        Some(ResolutionType::VerifiedRemediated)
+    );
+
+    // In Postgres: HSTS finding remains Open (unverified omission)
+    let omitted_hsts = store
+        .get_managed_finding(org.id, hsts_managed_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(omitted_hsts.status, FindingStatus::Open);
+
+    // Test Assessment Comparison in Postgres
+    let comp = store
+        .compare_assessments(org.id, job1.id, job2.id)
+        .await
+        .unwrap();
+    assert_eq!(comp.resolved_findings.len(), 1);
+    assert_eq!(comp.unverified_omissions.len(), 1);
+    assert!((comp.coverage_ratio - 0.5).abs() < f64::EPSILON);
+
+    // Mark job1 completed to test Posture Summary
+    store
+        .update_job_status(org.id, job1.id, JobStatus::Completed, Some("{}"), None)
+        .await
+        .unwrap();
+
+    let summary = store
+        .get_security_posture_summary(org.id, Some(asset.id))
+        .await
+        .unwrap();
+    assert_eq!(summary.total_assets, 1);
+    assert_eq!(summary.assessed_assets, 1);
+    assert_eq!(summary.total_active_findings, 1);
+    assert_eq!(summary.verified_remediations_count, 1);
 }
