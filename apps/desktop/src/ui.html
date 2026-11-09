@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAudit Desktop - Host Security Posture</title>
+  <style>
+    /* Injected from ui.css */
+  </style>
+</head>
+<body>
+  <!-- Sidebar Navigation -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-title">OpenAudit</div>
+        <div style="margin-top: 2px;"><code class="tech-pill">v0.1.0-alpha.0</code></div>
+      </div>
+    </div>
+
+    <div class="sidebar-section-title" style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); margin: 6px 0 4px 6px;">Auditing Modes</div>
+    <nav class="nav-group">
+      <div id="nav-overview" class="nav-item active" onclick="showTab('overview')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+          <line x1="8" y1="21" x2="16" y2="21"/>
+          <line x1="12" y1="17" x2="12" y2="21"/>
+        </svg>
+        Local Machine
+      </div>
+
+      <div id="nav-remote" class="nav-item" onclick="showTab('remote')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="2" y1="12" x2="22" y2="12"/>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+        Remote Server
+        <span class="tech-pill" style="margin-left: auto; font-size: 9px; padding: 1px 4px;">M4</span>
+      </div>
+
+      <div id="nav-enrolled" class="nav-item" onclick="showTab('enrolled')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+          <line x1="6" y1="6" x2="6.01" y2="6"/>
+          <line x1="6" y1="18" x2="6.01" y2="18"/>
+        </svg>
+        Enrolled Servers
+        <span class="tech-pill" style="margin-left: auto; font-size: 9px; padding: 1px 4px;">M5/6</span>
+      </div>
+    </nav>
+
+    <div class="sidebar-section-title" style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); margin: 12px 0 4px 6px;">Audit Inspection</div>
+    <nav class="nav-group">
+      <div id="nav-findings" class="nav-item" onclick="showTab('findings')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Findings &amp; Forensics
+        <span id="nav-findings-badge" class="badge badge-high" style="margin-left: auto; display: none;">0</span>
+      </div>
+
+      <div id="nav-rules" class="nav-item" onclick="showTab('rules')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="8" y1="6" x2="21" y2="6"/>
+          <line x1="8" y1="12" x2="21" y2="12"/>
+          <line x1="8" y1="18" x2="21" y2="18"/>
+          <line x1="3" y1="6" x2="3.01" y2="6"/>
+          <line x1="3" y1="12" x2="3.01" y2="12"/>
+          <line x1="3" y1="18" x2="3.01" y2="18"/>
+        </svg>
+        Rule Catalog
+      </div>
+
+      <div id="nav-report" class="nav-item" onclick="showTab('report')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        HTML Report
+      </div>
+    </nav>
+
+    <div class="sidebar-section-title" style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); margin: 12px 0 4px 6px;">Governance</div>
+    <nav class="nav-group">
+      <div id="nav-settings" class="nav-item" onclick="showTab('settings')">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+        Settings &amp; Permissions
+      </div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="footer-meta">
+        <span>Host Target</span>
+        <span id="meta-os" class="tech-pill">macOS (aarch64)</span>
+      </div>
+      <div class="footer-meta">
+        <span>Privilege</span>
+        <span id="meta-priv" class="tech-pill">Unprivileged</span>
+      </div>
+      <div class="footer-meta">
+        <span>Engine</span>
+        <span class="tech-pill" style="color: var(--accent-green);">&#x25cf; Online</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-left">
+        <h1 id="page-title" class="page-title">System Security Overview</h1>
+        <div id="scan-status-pill" class="scan-status-pill">
+          <span class="status-dot green"></span> Ready
+        </div>
+      </div>
+
+      <div class="topbar-right">
+        <!-- Segmented Audit Profile -->
+        <div class="segmented-group">
+          <button class="segmented-btn active" data-profile="baseline" onclick="setProfile('baseline')">Baseline</button>
+          <button class="segmented-btn" data-profile="hardened" onclick="setProfile('hardened')">Hardened</button>
+        </div>
+
+        <!-- Primary Run Audit Button -->
+        <button id="btn-run-audit" class="btn btn-primary" onclick="runAudit()">
+          <svg id="btn-run-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          <span id="btn-run-text">Run Audit</span>
+        </button>
+
+        <!-- Theme Toggle -->
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle Light/Dark Theme">
+          <span id="theme-icon">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+            </svg>
+          </span>
+        </button>
+      </div>
+    </header>
+
+    <div class="content">
+      <!-- High-Density Audit Progress Bar -->
+      <div id="audit-progress-container" class="progress-bar-container" style="display: none;">
+        <div class="progress-header">
+          <span class="progress-label">
+            <svg class="spinner" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+            <span id="progress-stage-text">Evaluating macOS security posture...</span>
+          </span>
+          <span id="progress-percent-text" class="progress-percent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="progress-fill" class="progress-fill" style="width: 0%;"></div>
+        </div>
+      </div>
+
+      <!-- Enterprise KPI Stat Tiles (Linear/Stripe standard) -->
+      <div class="kpi-grid">
+        <div class="kpi-card">
+          <span class="kpi-label">TOTAL FINDINGS</span>
+          <span id="kpi-total" class="kpi-stat-text">0</span>
+          <span class="kpi-caption">Host policy checks evaluated</span>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-label">CRITICAL &amp; HIGH</span>
+          <span id="kpi-crit-high" class="kpi-stat-text green">0</span>
+          <span class="kpi-caption">Severe security violations</span>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-label">EXECUTION PRIVILEGE</span>
+          <span id="kpi-privilege" class="kpi-stat-text" style="font-size: 16px; margin-top: 4px;">Unprivileged</span>
+          <span class="kpi-caption">Current macOS process token</span>
+        </div>
+
+        <div class="kpi-card">
+          <span class="kpi-label">SCAN DURATION</span>
+          <span id="kpi-duration" class="kpi-stat-text">--</span>
+          <span class="kpi-caption">In-process Rust engine execution</span>
+        </div>
+      </div>
+
+      <!-- Tab 1: Overview (Local Machine) -->
+      <div id="tab-overview" class="tab-pane">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Host Inspection Diagnostics</span>
+            <span class="badge badge-pass">LOCAL FIRST &bull; IN-PROCESS ENGINE</span>
+          </div>
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; font-size: 13px;">
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Platform Target</div>
+              <div id="diag-platform">macOS (Apple Silicon aarch64)</div>
+            </div>
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Architecture Boundary</div>
+              <div>Native Shared Engine (Direct Rust In-Process)</div>
+            </div>
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Active Telemetry Collectors</div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+                <span class="tech-pill">SIP (csrutil)</span>
+                <span class="tech-pill">FileVault (fdesetup)</span>
+                <span class="tech-pill">Gatekeeper (spctl)</span>
+                <span class="tech-pill">Firewall (socketfilterfw)</span>
+                <span class="tech-pill">Remote Login</span>
+                <span class="tech-pill">LaunchDaemons</span>
+                <span class="tech-pill">TCP Sockets</span>
+              </div>
+            </div>
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Registered Security Rules</div>
+              <div id="diag-rules-count">11 macOS Native Controls (Active) &bull; 20 Linux Server Rules &bull; 12 Windows Server Rules</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Evaluated Security Findings</span>
+            <button class="btn btn-sm" onclick="showTab('findings')">
+              Open Findings &amp; Forensics
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+          <div id="overview-findings-preview">
+            <div style="text-align: center; padding: 24px; color: var(--text-faint);">Evaluating host security posture...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Remote Server (Agentless Network Inspection) -->
+      <div id="tab-remote" class="tab-pane" style="display: none;">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Remote Server Assessment (Agentless Network Inspection)</span>
+            <span class="badge" style="background: var(--bg-subtle); color: var(--accent-blue); border: 1px solid var(--border-light);">MILESTONE 4 ROADMAP</span>
+          </div>
+          <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
+            Assess internet-facing or internal server perimeters without installing software on the target host. Evaluates safely observable network attributes, open ports, TLS/SSL configuration, HTTP security headers, and administrative exposure.
+          </div>
+
+          <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+            <div>
+              <label style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Target Hostname or IP</label>
+              <input type="text" id="remote-target-input" class="input" placeholder="e.g. 192.0.2.10 or server.example.com" value="192.0.2.10" style="width: 100%;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Port Range</label>
+              <input type="text" id="remote-port-input" class="input" placeholder="e.g. 80, 443, 8080 or 1-1024" value="80, 443, 8080, 8443, 22" style="width: 100%;">
+            </div>
+            <div>
+              <label style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Scan Profile</label>
+              <select class="input" style="width: 100%;">
+                <option value="network" selected>Network (Conservative)</option>
+                <option value="standard">Standard (Service Detection)</option>
+                <option value="deep">Deep (Comprehensive Inspection)</option>
+              </select>
+            </div>
+          </div>
+
+          <div style="margin-bottom: 16px; padding: 12px; background: var(--bg-subtle); border: 1px solid var(--border-light); border-radius: 6px;">
+            <label style="display: flex; align-items: flex-start; gap: 8px; font-size: 12px; cursor: pointer;">
+              <input type="checkbox" id="remote-auth-check" style="margin-top: 2px;">
+              <span><strong>Explicit Authorization Certified:</strong> I certify that I own this target network infrastructure or possess documented, authorized permission from the owner to conduct non-destructive perimeter security assessments.</span>
+            </label>
+          </div>
+
+          <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 16px;">
+            <button class="btn btn-primary" onclick="showRemoteScanNotice()">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              Inspect Remote Target
+            </button>
+            <span style="font-size: 11px; color: var(--text-muted);">Non-destructive probes &bull; Anti-SSRF enforcement &bull; Rate-limited</span>
+          </div>
+
+          <div class="weight-row boost" style="cursor: default;">
+            <div style="flex: 1;">
+              <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;">
+                Critical Architectural Distinction: Network Assessment vs Operating System Audit
+              </div>
+              <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5;">
+                An IP address or hostname alone cannot provide a complete operating-system security audit. Agentless results are classified strictly as a <strong>Network Assessment</strong>. Observable network headers and port states cannot reliably determine internal OS user accounts, file permissions, installed package CVEs, or kernel parameters. Full OS auditing requires local execution or enrolled OpenAudit agents.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Enrolled Servers (Fleet Management) -->
+      <div id="tab-enrolled" class="tab-pane" style="display: none;">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Enrolled Server Fleet Management</span>
+            <span class="badge" style="background: var(--bg-subtle); color: var(--accent-blue); border: 1px solid var(--border-light);">MILESTONES 5 &amp; 6 ROADMAP</span>
+          </div>
+          <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;">
+            Continuous and scheduled server auditing powered by lightweight, securely enrolled OpenAudit agents on Linux and Windows servers. Agents execute local audits using the shared Rust engine and cryptographically sign results back to the control plane.
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px;">
+            <div class="kpi-card" style="padding: 12px;">
+              <div class="kpi-label">Step 1 &bull; Agent Install</div>
+              <div style="font-size: 13px; font-weight: 600; margin: 4px 0;">Lightweight Binary</div>
+              <div class="kpi-caption">Zero-runtime headless binary deployed via Ansible, script, or package manager.</div>
+            </div>
+            <div class="kpi-card" style="padding: 12px;">
+              <div class="kpi-label">Step 2 &bull; Identity &amp; D4</div>
+              <div style="font-size: 13px; font-weight: 600; margin: 4px 0;">Hardware Attestation</div>
+              <div class="kpi-caption">Cryptographic machine identity backed by TPM 2.0 or secure software keystore.</div>
+            </div>
+            <div class="kpi-card" style="padding: 12px;">
+              <div class="kpi-label">Step 3 &bull; Enrollment</div>
+              <div style="font-size: 13px; font-weight: 600; margin: 4px 0;">Mutual TLS Handshake</div>
+              <div class="kpi-caption">Enrolls with openaudit-server control plane. Enrollment secrets never exposed.</div>
+            </div>
+            <div class="kpi-card" style="padding: 12px;">
+              <div class="kpi-label">Step 4 &bull; Local Execution</div>
+              <div style="font-size: 13px; font-weight: 600; margin: 4px 0;">Shared Rust Engine</div>
+              <div class="kpi-caption">Runs local collectors for Linux/Windows rules in under 300ms. No engine duplication.</div>
+            </div>
+            <div class="kpi-card" style="padding: 12px;">
+              <div class="kpi-label">Step 5 &bull; Signed Telemetry</div>
+              <div style="font-size: 13px; font-weight: 600; margin: 4px 0;">Tamper-Evident Evidence</div>
+              <div class="kpi-caption">Transmits signed findings, evidence, and check statuses with replay protection.</div>
+            </div>
+            <div class="kpi-card" style="padding: 12px;">
+              <div class="kpi-label">Step 6 &bull; Centralized Fleet</div>
+              <div style="font-size: 13px; font-weight: 600; margin: 4px 0;">Continuous Posture</div>
+              <div class="kpi-caption">Multi-tenant dashboard, scheduled cron audits, and historical posture tracking.</div>
+            </div>
+          </div>
+
+          <div class="card" style="padding: 0; overflow: hidden; margin-top: 14px;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Server Hostname</th>
+                  <th>Operating System</th>
+                  <th>Enrolled Status</th>
+                  <th>Attestation</th>
+                  <th>Last Audit</th>
+                  <th>Severity Posture</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>prod-api-01.infra.internal</code></td>
+                  <td>Ubuntu 24.04 LTS (x86_64)</td>
+                  <td><span class="badge badge-pass">Enrolled</span></td>
+                  <td><span class="tech-pill">TPM 2.0 &bull; D4 Verified</span></td>
+                  <td>12 mins ago</td>
+                  <td><span class="badge badge-pass">0 Findings</span></td>
+                </tr>
+                <tr>
+                  <td><code>db-primary.infra.internal</code></td>
+                  <td>Debian 12 Bookworm</td>
+                  <td><span class="badge badge-pass">Enrolled</span></td>
+                  <td><span class="tech-pill">Software Keystore</span></td>
+                  <td>1 hour ago</td>
+                  <td><span class="badge badge-med">1 Medium</span></td>
+                </tr>
+                <tr>
+                  <td><code>win-dc-01.corp.internal</code></td>
+                  <td>Windows Server 2025</td>
+                  <td><span class="badge badge-pass">Enrolled</span></td>
+                  <td><span class="tech-pill">vTPM &bull; D4 Verified</span></td>
+                  <td>4 hours ago</td>
+                  <td><span class="badge badge-high">1 High</span></td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="padding: 10px 14px; background: var(--bg-subtle); border-top: 1px solid var(--border-light); font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between;">
+              <span>3 Enrolled Server Agents (Fleet Architecture Specification)</span>
+              <span>Control Plane &bull; Scheduled for M5/M6</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2: Findings & Forensics (Master-Detail Linear Standard) -->
+      <div id="tab-findings" class="tab-pane" style="display: none;">
+        <div class="master-detail-grid">
+          <!-- Left: Master Findings List -->
+          <div class="master-pane">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+              <div class="segmented-group">
+                <button class="segmented-btn filter-btn active" data-severity="all" onclick="filterFindings('all')">All (<span id="count-all">0</span>)</button>
+                <button class="segmented-btn filter-btn" data-severity="critical" onclick="filterFindings('critical')">Crit (<span id="count-crit">0</span>)</button>
+                <button class="segmented-btn filter-btn" data-severity="high" onclick="filterFindings('high')">High (<span id="count-high">0</span>)</button>
+                <button class="segmented-btn filter-btn" data-severity="medium" onclick="filterFindings('medium')">Med (<span id="count-med">0</span>)</button>
+                <button class="segmented-btn filter-btn" data-severity="low" onclick="filterFindings('low')">Low (<span id="count-low">0</span>)</button>
+              </div>
+
+              <input type="text" id="findings-search" class="input search-box" placeholder="Filter..." oninput="onSearchFindings()">
+            </div>
+
+            <div id="findings-list" class="master-list">
+              <div style="text-align: center; padding: 40px; color: var(--text-faint);">Loading findings...</div>
+            </div>
+          </div>
+
+          <!-- Right: Detailed Forensic Inspector -->
+          <div class="detail-pane">
+            <div style="display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px;">
+              <div>
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                  <span id="detail-sev-badge" class="badge badge-high">HIGH</span>
+                  <code id="detail-rule-id" class="tech-pill">macos.firewall.disabled</code>
+                </div>
+                <h2 id="detail-title" style="font-size: 17px; font-weight: 700; margin: 0; color: var(--text-primary);">macOS Application Firewall Disabled</h2>
+              </div>
+              <span id="detail-target" class="tech-pill" style="font-size: 11px;">Target: ApplicationFirewall</span>
+            </div>
+
+            <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Security Impact &amp; Risk</div>
+            <div id="detail-desc" style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5;"></div>
+
+            <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Operator Remediation Guidance</div>
+            <div id="detail-rem" class="remediation-box"></div>
+            
+            <div class="code-action-box">
+              <code id="detail-rem-cmd">sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on</code>
+              <button class="btn btn-sm" onclick="copyRemediationCmd()">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                Copy Command
+              </button>
+            </div>
+
+            <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin: 18px 0 4px 0;">Captured Forensic System Evidence</div>
+            <div class="terminal-window">
+              <div class="terminal-header">
+                <span>PAYLOAD INSPECTOR &bull; SANITIZED TELEMETRY</span>
+                <span class="terminal-badge">
+                  <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                  VERIFIED
+                </span>
+              </div>
+              <pre id="detail-payload" class="evidence-box">// Raw telemetry payload</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3: Rule Catalog -->
+      <div id="tab-rules" class="tab-pane" style="display: none;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <div class="segmented-group">
+            <button class="segmented-btn rule-plat-btn active" data-platform="MacOS" onclick="filterRulesPlatform('MacOS')">macOS Native (11 Active)</button>
+            <button class="segmented-btn rule-plat-btn" data-platform="Linux" onclick="filterRulesPlatform('Linux')">Linux Server (20)</button>
+            <button class="segmented-btn rule-plat-btn" data-platform="Windows" onclick="filterRulesPlatform('Windows')">Windows Server (12)</button>
+            <button class="segmented-btn rule-plat-btn" data-platform="all" onclick="filterRulesPlatform('all')">All Platforms (43)</button>
+          </div>
+
+          <input type="text" id="rules-search" class="input search-box" placeholder="Search rules..." oninput="onSearchRules()">
+        </div>
+
+        <div id="platform-scope-banner" class="weight-row boost" style="margin-bottom: 12px; cursor: default;">
+          <div style="flex: 1;">
+            <div id="platform-scope-title" style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 2px;">
+              macOS Host Security Controls (Active)
+            </div>
+            <div id="platform-scope-desc" style="font-size: 12px; color: var(--text-secondary);">
+              11 native platform security rules evaluated directly against this macOS host (Sonoma &amp; Sequoia Apple Silicon).
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="padding: 0; overflow: hidden;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th style="width: 250px;">Rule Identifier</th>
+                <th>Rule Title</th>
+                <th style="width: 80px;">Severity</th>
+                <th style="width: 110px;">Privilege</th>
+                <th style="width: 80px;">Profile</th>
+                <th style="width: 150px;">OS Target &amp; Status</th>
+              </tr>
+            </thead>
+            <tbody id="rules-tbody">
+              <tr><td colspan="6" style="text-align: center; padding: 24px; color: var(--text-faint);">Loading built-in rule catalog...</td></tr>
+            </tbody>
+          </table>
+          <div style="padding: 10px 14px; background: var(--bg-subtle); border-top: 1px solid var(--border-light); font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between;">
+            <span id="rules-count-label">Showing 11 rules</span>
+            <span>Shared Rust Engine &bull; Zero Simulation</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 4: HTML Report Preview -->
+      <div id="tab-report" class="tab-pane" style="display: none;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+          <div style="font-size: 12px; color: var(--text-secondary);">
+            Self-contained static audit report generated directly from in-process engine results.
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn" onclick="openExportedReport()">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                <polyline points="15 3 21 3 21 9"/>
+                <line x1="10" y1="14" x2="21" y2="3"/>
+              </svg>
+              Open in Browser
+            </button>
+            <button class="btn btn-primary" onclick="exportReport()">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Export HTML Report
+            </button>
+          </div>
+        </div>
+        <div class="card" style="padding: 0; overflow: hidden; height: calc(100vh - 215px);">
+          <iframe id="report-iframe" style="width: 100%; height: 100%; border: none; background: var(--bg-card);"></iframe>
+        </div>
+      </div>
+
+      <!-- Tab 5: Settings & macOS Permissions -->
+      <div id="tab-settings" class="tab-pane" style="display: none;">
+        <!-- macOS System Permissions Card -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">macOS System Security &amp; Permissions (TCC)</span>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <span id="perms-live-indicator" class="tech-pill" style="color: var(--accent-green);">&#x25cf; Live Diagnostics</span>
+              <button class="btn btn-sm" onclick="recheckPermissions()">
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/>
+                </svg>
+                Re-check Permissions
+              </button>
+            </div>
+          </div>
+
+          <div id="fda-warning-banner" class="weight-row penalty-high" style="display: none; margin-bottom: 14px; cursor: default;">
+            <div style="flex: 1; padding-right: 12px;">
+              <div style="font-weight: 700; font-size: 13px; color: var(--text-primary); margin-bottom: 2px;">Full Disk Access Permission Recommended for Deep Telemetry</div>
+              <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+                macOS TCC restricts unprivileged inspection of system daemons in <code>/Library/LaunchDaemons</code>. Click <strong>Open Full Disk Access Settings</strong> below, toggle OpenAudit / Terminal to Allowed, then click <strong>Re-check Permissions</strong>.
+              </div>
+            </div>
+          </div>
+
+          <div class="action-row">
+            <div class="action-row-left">
+              <div class="action-row-title">
+                Full Disk Access (FDA)
+                <span id="fda-status-badge" class="badge badge-neutral">Checking...</span>
+              </div>
+              <div class="action-row-desc">
+                Required for deep inspection of protected launch daemons in <code>/Library/LaunchDaemons</code>, Time Machine configurations, and daemon security states without TCC permission blocks.
+              </div>
+            </div>
+            <button class="btn btn-sm" onclick="openSystemSettings('fda')">
+              Open Full Disk Access Settings
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
+
+          <div class="action-row">
+            <div class="action-row-left">
+              <div class="action-row-title">
+                System Integrity Protection (SIP)
+                <span id="sip-status-badge" class="badge badge-neutral">Checking...</span>
+              </div>
+              <div class="action-row-desc">
+                Apple kernel-level security architecture enforcing rootless containment over system binaries. OpenAudit audits SIP posture in read-only mode without modifying system files.
+              </div>
+            </div>
+            <button class="btn btn-sm" onclick="openSystemSettings('security')">
+              Privacy &amp; Security Settings
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
+
+          <div class="action-row">
+            <div class="action-row-left">
+              <div class="action-row-title">
+                macOS Application Firewall
+                <span id="fw-status-badge" class="badge badge-high">Audited</span>
+              </div>
+              <div class="action-row-desc">
+                Socket filter application firewall inspected by OpenAudit rule <code>macos.firewall.disabled</code>.
+              </div>
+            </div>
+            <button class="btn btn-sm" onclick="openSystemSettings('firewall')">
+              Open Firewall Settings
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- Execution Privilege & Elevation Card -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Execution Privilege &amp; Elevation Guidance</span>
+            <span id="settings-priv-badge" class="badge badge-neutral">UNPRIVILEGED</span>
+          </div>
+
+          <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; line-height: 1.5;">
+            OpenAudit runs safely as an unprivileged process by default. Rules requiring root access are marked with <code>PrivilegeLevel::Root</code> and are skipped when run unprivileged to protect host integrity.
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 14px;">
+            <div style="background: var(--bg-subtle); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-light);">
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Process UID</div>
+              <div id="settings-uid" style="font-family: var(--font-mono); font-size: 16px; font-weight: 700; margin-top: 2px;">501</div>
+            </div>
+            <div style="background: var(--bg-subtle); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-light);">
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">User Account</div>
+              <div id="settings-user" style="font-family: var(--font-mono); font-size: 16px; font-weight: 700; margin-top: 2px;">mac</div>
+            </div>
+            <div style="background: var(--bg-subtle); padding: 10px 12px; border-radius: 6px; border: 1px solid var(--border-light);">
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Effective Token</div>
+              <div id="settings-effective" style="font-family: var(--font-mono); font-size: 16px; font-weight: 700; margin-top: 2px;">Unprivileged</div>
+            </div>
+          </div>
+
+          <div style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Elevated Terminal Execution Commands</div>
+          <pre class="evidence-box"># Run full root posture audit from terminal:
+sudo target/release/openaudit-cli scan --profile hardened
+
+# Launch desktop GUI with root privilege:
+sudo ./target/debug/openaudit-desktop</pre>
+        </div>
+
+        <!-- Engine Local-First Governance Card -->
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Audit Engine Governance</span>
+            <span class="badge badge-pass">OFFLINE &bull; ZERO CLOUD TELEMETRY</span>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; font-size: 13px;">
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Engine Version</div>
+              <div><code class="tech-pill">openaudit-engine v0.1.0-alpha.0</code></div>
+            </div>
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Target Host Architecture</div>
+              <div><code class="tech-pill">aarch64-apple-darwin (Apple Silicon)</code></div>
+            </div>
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">Default Target Organization</div>
+              <div><code class="tech-pill">openaudit:desktop:local</code></div>
+            </div>
+            <div>
+              <div style="color: var(--text-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; margin-bottom: 2px;">HTML Report Output Path</div>
+              <div><code class="tech-pill">/tmp/openaudit-report.html</code></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    /* Injected from ui.js */
+  </script>
+</body>
+</html>

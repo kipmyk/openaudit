@@ -1,0 +1,24 @@
+[package]
+name = "openaudit-desktop"
+description = "Native macOS desktop application for OpenAudit posture auditing"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openaudit-core = { workspace = true }
+openaudit-engine = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tao = "0.37"
+wry = "0.57"
