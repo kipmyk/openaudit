@@ -179,3 +179,4 @@ A central finding across all evaluated tools is the **impermeable boundary betwe
 **Task:** Finalize and verify Milestone 3 local cross-platform packaging and git governance:
 1. Perform local Git commit of verified M3 deliverables (`feat(desktop)`, `feat(cli)`, `docs(architecture)`).
 2. Ensure working tree is clean and ready for Milestone 4 perimeter scanner design.
+
