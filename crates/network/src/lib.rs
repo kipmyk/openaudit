@@ -4,6 +4,7 @@
 //! scope authorization, SSRF protection, and pinned DNS resolution.
 
 pub mod error;
+pub mod http;
 pub mod pinned;
 pub mod redirect;
 pub mod resolver;
@@ -14,6 +15,10 @@ pub mod target;
 pub mod tls;
 
 pub use error::NetworkError;
+pub use http::{
+    HttpAssessConfig, HttpCookie, HttpFinding, HttpFindingSeverity, HttpPostureAssessment,
+    HttpPostureAssessor, HttpResponseSnapshot,
+};
 pub use pinned::PinnedTarget;
 pub use redirect::RedirectValidator;
 pub use resolver::{DnsResolver, SystemDnsResolver};

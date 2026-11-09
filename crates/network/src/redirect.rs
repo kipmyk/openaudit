@@ -10,6 +10,7 @@ use crate::pinned::PinnedTarget;
 use crate::resolver::{resolve_and_pin, DnsResolver};
 use crate::scope::TargetScope;
 use crate::target::CanonicalTarget;
+use std::net::SocketAddr;
 
 /// Validates HTTP redirection chains against security scope policies.
 #[derive(Debug, Clone)]
@@ -50,15 +51,20 @@ impl RedirectValidator {
         }
 
         // Handle relative URLs (e.g. "/login" or "path/to/page")
+        let scheme = if origin.pinned_addr.port() == 443 {
+            "https"
+        } else {
+            "http"
+        };
         let absolute_location = if location.starts_with('/') {
             let port_str = if origin.pinned_addr.port() == 80 || origin.pinned_addr.port() == 443 {
                 String::new()
             } else {
                 format!(":{}", origin.pinned_addr.port())
             };
-            format!("http://{}{}{}", origin.sni_hostname, port_str, location)
+            format!("{scheme}://{}{}{}", origin.sni_hostname, port_str, location)
         } else if !location.contains("://") {
-            format!("http://{}/{}", origin.sni_hostname, location)
+            format!("{scheme}://{}/{}", origin.sni_hostname, location)
         } else {
             location.to_string()
         };
@@ -73,14 +79,29 @@ impl RedirectValidator {
             80
         };
 
-        // Re-resolve, re-validate all addresses, and pin new target
-        let new_pinned =
-            resolve_and_pin(&new_target, scope, resolver, default_port).map_err(|e| {
+        // If target host matches the origin, reuse the already validated pinned IP address
+        // to prevent DNS rebinding attacks during redirection and avoid redundant lookups.
+        if new_target.normalized_host == origin.canonical_target.normalized_host {
+            let port = new_target.port.unwrap_or(default_port);
+            let pinned_addr = SocketAddr::new(origin.pinned_addr.ip(), port);
+            let classification = scope.validate_destination(pinned_addr.ip()).map_err(|e| {
                 NetworkError::RedirectViolation(format!(
                     "Redirect destination '{location}' violates security scope: {e}"
                 ))
             })?;
-
-        Ok(new_pinned)
+            Ok(PinnedTarget {
+                canonical_target: new_target,
+                pinned_addr,
+                sni_hostname: origin.sni_hostname.clone(),
+                classification,
+            })
+        } else {
+            // Destination host differs: resolve, validate ALL returned addresses, and pin new target
+            resolve_and_pin(&new_target, scope, resolver, default_port).map_err(|e| {
+                NetworkError::RedirectViolation(format!(
+                    "Redirect destination '{location}' violates security scope: {e}"
+                ))
+            })
+        }
     }
 }

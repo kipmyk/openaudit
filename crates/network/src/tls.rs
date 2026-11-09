@@ -569,7 +569,8 @@ impl TlsAssessor {
 
     /// Provides an ephemeral self-contained root anchor so WebPkiServerVerifier can be
     /// constructed for peer certificate observation when no custom root anchors are configured.
-    fn fallback_root_store() -> Arc<RootCertStore> {
+    #[must_use]
+    pub fn fallback_root_store() -> Arc<RootCertStore> {
         static FALLBACK_STORE: std::sync::OnceLock<Arc<RootCertStore>> = std::sync::OnceLock::new();
         FALLBACK_STORE
             .get_or_init(|| {
