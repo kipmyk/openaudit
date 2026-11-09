@@ -134,6 +134,37 @@ openaudit-0.1.0-alpha.0-windows-x86_64/
 └── README.md
 ```
 
+### E. macOS Application Bundle (`OpenAudit.app`)
+The native desktop GUI is packaged into a standard macOS application bundle:
+```text
+OpenAudit.app/
+└── Contents/
+    ├── Info.plist              (Bundle ID: ke.co.mike.openaudit, LSMinimumSystemVersion: 14.0)
+    ├── MacOS/
+    │   └── openaudit-desktop   (Mach-O arm64 release binary)
+    └── Resources/
+        └── AppIcon.icns        (Multi-resolution native icon)
+```
+
+---
+
+## 5. macOS Code Signing, Gatekeeper & Notarization Realities
+
+We maintain an honest, truthful engineering standard regarding macOS security boundaries:
+
+1. **Locally Executable & Ad-Hoc Signed Development Builds:**
+   - Apple Silicon kernels require Mach-O binaries to possess valid code directory hashes to launch (`codesign --sign -`). Without ad-hoc signatures, ARM64 kernels terminate the process immediately.
+   - Ad-hoc signing enables **local developer execution** without requiring paid certificates or network access.
+   - *Limitation:* Ad-hoc signatures **do NOT satisfy macOS Gatekeeper** for untrusted external distribution. Users downloading an ad-hoc signed app from the web will receive a quarantine block ("Apple could not verify this app").
+
+2. **External Distribution Readiness (Developer ID + Notarization):**
+   - Normal distribution to end-users without quarantine warnings requires:
+     1. An active Apple Developer Program membership.
+     2. Code signing using a valid `Developer ID Application` certificate with secure timestamping (`--options runtime --timestamp`).
+     3. Submitting the package to Apple's Notary Service (`xcrun notarytool submit --wait`).
+     4. Attaching the cryptographic ticket to the bundle (`xcrun stapler staple OpenAudit.app`).
+   - *OpenAudit Status:* Current local builds are ad-hoc signed for developer execution on Apple Silicon. Developer ID signing and Apple notarization are supported in `scripts/package-macos-app.sh` (via `MACOS_DEVELOPER_ID` and `MACOS_NOTARIZE=true`), but are NOT claimed as completed until production release keys are provisioned.
+
 ---
 
 ## 5. Strict Independence of CLI Operation

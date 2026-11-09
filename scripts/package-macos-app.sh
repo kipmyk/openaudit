@@ -50,11 +50,24 @@ chmod 0755 "${APP_BUNDLE}/Contents/MacOS/openaudit-desktop"
 cp "${WORKSPACE_ROOT}/packaging/macos/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
 cp "${WORKSPACE_ROOT}/packaging/macos/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"
 
-# 5. Ad-hoc codesign for local Apple Silicon execution
-if command -v codesign >/dev/null 2>&1; then
-    echo "[*] Applying ad-hoc code signature for Apple Silicon compliance..."
+# 5. Code signing: Ad-hoc for local development vs Developer ID for external distribution
+# NOTE: Ad-hoc signing (codesign --sign -) permits local Mach-O execution on Apple Silicon.
+# It does NOT provide Gatekeeper compliance for external distribution, which requires
+# an Apple Developer ID Application certificate and Apple Notarization (xcrun notarytool).
+if [ -n "${MACOS_DEVELOPER_ID:-}" ]; then
+    echo "[*] Signing with Developer ID Application: ${MACOS_DEVELOPER_ID}..."
+    codesign --force --deep --options runtime --timestamp --sign "${MACOS_DEVELOPER_ID}" "${APP_BUNDLE}"
+    echo "[+] Developer ID code signature applied."
+    if [ "${MACOS_NOTARIZE:-false}" = "true" ]; then
+        echo "[*] Notarization requested. Submitting to Apple Notary Service..."
+        xcrun notarytool submit "${DIST_DIR}/${ZIP_NAME}" --keychain-profile "AC_PASSWORD" --wait
+        xcrun stapler staple "${APP_BUNDLE}"
+        echo "[+] Apple Notarization and ticket stapling complete."
+    fi
+elif command -v codesign >/dev/null 2>&1; then
+    echo "[*] Applying ad-hoc code signature for local Apple Silicon development execution..."
     codesign --force --deep --sign - "${APP_BUNDLE}"
-    echo "[+] Code signature verified: $(codesign -v "${APP_BUNDLE}" 2>&1 || true)"
+    echo "[+] Ad-hoc signature verified for local host execution (NOT notarized for external distribution)."
 fi
 
 # 6. Create distributable zip archive
@@ -67,3 +80,4 @@ echo "[+] macOS Application Bundle Created Successfully:"
 echo "    App Bundle: ${APP_BUNDLE}"
 echo "    Distribution Zip: ${DIST_DIR}/${ZIP_NAME} ($(du -h "${DIST_DIR}/${ZIP_NAME}" | cut -f1))"
 echo "================================================================================"
+
