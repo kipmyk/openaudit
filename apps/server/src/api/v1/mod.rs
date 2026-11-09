@@ -4,7 +4,10 @@ pub mod agents;
 pub mod assessments;
 pub mod assets;
 pub mod auth;
+pub mod findings;
 pub mod orgs;
+pub mod posture;
+pub mod reports;
 pub mod schedules;
 
 use axum::routing::{delete, get, post};
@@ -46,6 +49,36 @@ pub fn router() -> Router<Arc<AppState>> {
             "/assessments/findings",
             get(assessments::list_all_findings_handler),
         )
+        .route(
+            "/assessments/compare",
+            get(posture::compare_assessments_handler),
+        )
+        .route(
+            "/assessments/history",
+            get(posture::list_assessment_history_handler),
+        )
+        // Managed Findings & Remediation (M7)
+        .route("/findings", get(findings::list_managed_findings_handler))
+        .route("/findings/:id", get(findings::get_managed_finding_handler))
+        .route(
+            "/findings/:id/status",
+            post(findings::update_finding_status_handler),
+        )
+        .route(
+            "/findings/:id/assign",
+            post(findings::assign_finding_owner_handler),
+        )
+        .route(
+            "/findings/:id/history",
+            get(findings::get_finding_history_handler),
+        )
+        // Security Posture Intelligence (M7)
+        .route(
+            "/posture/summary",
+            get(posture::get_posture_summary_handler),
+        )
+        // Report Exports (M7)
+        .route("/reports/export", get(reports::export_report_handler))
         // Schedules
         .route("/schedules", post(schedules::create_schedule_handler))
         .route("/schedules", get(schedules::list_schedules_handler))
