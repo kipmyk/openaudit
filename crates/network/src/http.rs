@@ -662,19 +662,30 @@ impl HttpPostureAssessor {
                             .take_while(|c| c.is_ascii_digit())
                             .collect();
                         if let Ok(secs) = digits.parse::<u64>() {
-                            if secs < 10_368_000 {
-                                // Less than 120 days
+                            if secs == 0 {
+                                findings.push(HttpFinding {
+                                    id: "http.headers.hsts-disabled".into(),
+                                    severity: HttpFindingSeverity::Medium,
+                                    confidence: "Confirmed".into(),
+                                    title: "HSTS Explicitly Disabled (max-age=0)".into(),
+                                    endpoint: ep.clone(),
+                                    evidence: "Strict-Transport-Security configured with max-age=0, disabling transport security enforcement.".into(),
+                                    recommendation: "Set max-age to at least 31536000 (1 year) to maintain active HSTS protection.".into(),
+                                    timestamp: now_utc,
+                                });
+                            } else if secs < 10_368_000 {
+                                // Less than 120 days - policy recommendation, not invalid configuration
                                 findings.push(HttpFinding {
                                     id: "http.headers.hsts-short-duration".into(),
                                     severity: HttpFindingSeverity::Low,
                                     confidence: "Confirmed".into(),
-                                    title: "HSTS max-age Duration Too Short".into(),
+                                    title: "HSTS Policy Recommendation: Short max-age Duration".into(),
                                     endpoint: ep.clone(),
                                     evidence: format!(
-                                        "max-age={secs} seconds (less than recommended 10368000s / 120 days)"
+                                        "max-age={secs} seconds (below recommended 10368000s / 120-day threshold). Header is syntactically valid."
                                     ),
                                     recommendation:
-                                        "Increase HSTS max-age to at least 31536000 (1 year) for production services."
+                                        "Once HTTPS stability is validated, increase HSTS max-age to 31536000 (1 year) for production services."
                                             .into(),
                                     timestamp: now_utc,
                                 });
@@ -720,12 +731,12 @@ impl HttpPostureAssessor {
                     findings.push(HttpFinding {
                         id: "http.headers.csp-unsafe".into(),
                         severity: HttpFindingSeverity::Low,
-                        confidence: "Confirmed".into(),
-                        title: "Content Security Policy Contains Unsafe Directives".into(),
+                        confidence: "Tentative".into(),
+                        title: "Content Security Policy Observation: Unsafe Directives Present".into(),
                         endpoint: ep.clone(),
-                        evidence: format!("CSP includes unsafe execution keyword: {csp}"),
+                        evidence: format!("CSP includes execution directive: {csp}"),
                         recommendation:
-                            "Remove 'unsafe-inline' and 'unsafe-eval' directives; use cryptographic nonces or hashes."
+                            "Where practical, refactor inline scripts and eval() to use cryptographic nonces, hashes, or external script bundles."
                                 .into(),
                         timestamp: now_utc,
                     });
@@ -857,11 +868,11 @@ impl HttpPostureAssessor {
                     id: "http.headers.missing-permissions-policy".into(),
                     severity: HttpFindingSeverity::Info,
                     confidence: "Confirmed".into(),
-                    title: "Missing Permissions-Policy Header".into(),
+                    title: "Hardening Opportunity: Permissions-Policy Not Configured".into(),
                     endpoint: ep.clone(),
                     evidence: "Permissions-Policy header is absent.".into(),
                     recommendation:
-                        "Configure Permissions-Policy to restrict unauthorized browser APIs (camera, microphone, geolocation)."
+                        "Configure Permissions-Policy to explicitly restrict powerful browser APIs (camera, microphone, geolocation)."
                             .into(),
                     timestamp: now_utc,
                 });
@@ -903,10 +914,26 @@ impl HttpPostureAssessor {
 
             // 8. Insecure Cookies Inspection
             for cookie in &observed_cookies {
+                let lower_name = cookie.name.to_ascii_lowercase();
+                let is_session_cookie = lower_name.contains("session")
+                    || lower_name.contains("sess")
+                    || lower_name.contains("auth")
+                    || lower_name.contains("token")
+                    || lower_name.contains("id")
+                    || lower_name.contains("jwt")
+                    || lower_name.contains("sid")
+                    || lower_name.contains("csrf")
+                    || lower_name.contains("xsrf");
+
                 if resp.is_tls && !cookie.has_secure {
+                    let sev = if is_session_cookie {
+                        HttpFindingSeverity::Medium
+                    } else {
+                        HttpFindingSeverity::Low
+                    };
                     findings.push(HttpFinding {
                         id: "http.cookie.missing-secure".into(),
-                        severity: HttpFindingSeverity::Medium,
+                        severity: sev,
                         confidence: "Confirmed".into(),
                         title: format!("Cookie '{}' Missing Secure Attribute", cookie.name),
                         endpoint: ep.clone(),
@@ -919,29 +946,63 @@ impl HttpPostureAssessor {
                 }
 
                 if !cookie.has_httponly {
+                    if is_session_cookie {
+                        findings.push(HttpFinding {
+                            id: "http.cookie.missing-httponly".into(),
+                            severity: HttpFindingSeverity::Medium,
+                            confidence: "Confirmed".into(),
+                            title: format!("Session Cookie '{}' Missing HttpOnly Attribute", cookie.name),
+                            endpoint: ep.clone(),
+                            evidence: format!("Sensitive session cookie name='{}' lacks HttpOnly flag", cookie.name),
+                            recommendation:
+                                "Set the 'HttpOnly' attribute to prevent cookie access from JavaScript."
+                                    .into(),
+                            timestamp: now_utc,
+                        });
+                    } else {
+                        findings.push(HttpFinding {
+                            id: "http.cookie.missing-httponly".into(),
+                            severity: HttpFindingSeverity::Info,
+                            confidence: "Confirmed".into(),
+                            title: format!("Cookie '{}' Accessible to Client Scripts", cookie.name),
+                            endpoint: ep.clone(),
+                            evidence: format!("Set-Cookie name='{}' lacks HttpOnly flag (acceptable for client-read cookies)", cookie.name),
+                            recommendation:
+                                "Verify whether this cookie stores sensitive session state or is intentionally accessible to client JavaScript."
+                                    .into(),
+                            timestamp: now_utc,
+                        });
+                    }
+                }
+
+                // Check SameSite=None without Secure
+                if cookie.same_site.as_deref().is_some_and(|s| s.eq_ignore_ascii_case("none")) && !cookie.has_secure {
                     findings.push(HttpFinding {
-                        id: "http.cookie.missing-httponly".into(),
-                        severity: HttpFindingSeverity::Medium,
+                        id: "http.cookie.samesite-none-insecure".into(),
+                        severity: HttpFindingSeverity::High,
                         confidence: "Confirmed".into(),
-                        title: format!("Cookie '{}' Missing HttpOnly Attribute", cookie.name),
+                        title: format!("Cookie '{}' Configured with SameSite=None Without Secure", cookie.name),
                         endpoint: ep.clone(),
-                        evidence: format!("Set-Cookie name='{}' lacks HttpOnly flag", cookie.name),
+                        evidence: format!("Cookie '{}' has SameSite=None but lacks Secure flag", cookie.name),
                         recommendation:
-                            "Set the 'HttpOnly' attribute to prevent cookie access from JavaScript."
+                            "Browsers reject SameSite=None cookies unless the Secure attribute is also specified."
                                 .into(),
                         timestamp: now_utc,
                     });
-                }
-
-                if cookie.same_site.is_none() {
+                } else if cookie.same_site.is_none() {
+                    let sev = if is_session_cookie {
+                        HttpFindingSeverity::Low
+                    } else {
+                        HttpFindingSeverity::Info
+                    };
                     findings.push(HttpFinding {
                         id: "http.cookie.missing-samesite".into(),
-                        severity: HttpFindingSeverity::Low,
+                        severity: sev,
                         confidence: "Confirmed".into(),
                         title: format!("Cookie '{}' Missing SameSite Attribute", cookie.name),
                         endpoint: ep.clone(),
                         evidence: format!(
-                            "Set-Cookie name='{}' lacks SameSite attribute",
+                            "Set-Cookie name='{}' does not specify a SameSite policy",
                             cookie.name
                         ),
                         recommendation:
