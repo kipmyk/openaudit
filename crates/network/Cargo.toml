@@ -16,6 +16,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
+rustls = { workspace = true, features = ["tls12"] }
+rustls-pki-types = { workspace = true }
+x509-parser = "0.18"
+sha2 = { workspace = true }
+rsa = { workspace = true }
+rcgen = { workspace = true }
 tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]

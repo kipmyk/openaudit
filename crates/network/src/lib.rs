@@ -11,6 +11,7 @@ pub mod scanner;
 pub mod scope;
 pub mod service;
 pub mod target;
+pub mod tls;
 
 pub use error::NetworkError;
 pub use pinned::PinnedTarget;
@@ -23,3 +24,7 @@ pub use service::{
     ServiceIdentifyConfig,
 };
 pub use target::{CanonicalTarget, TargetType};
+pub use tls::{
+    CertificateMetadata, CertificateTrustStatus, CipherSecurityRating, NegotiatedCipherSuite,
+    TlsAssessConfig, TlsAssessor, TlsFinding, TlsFindingSeverity, TlsPostureAssessment, TlsVersion,
+};
