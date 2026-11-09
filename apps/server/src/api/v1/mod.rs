@@ -1,5 +1,6 @@
 //! API Version 1 routes.
 
+pub mod agents;
 pub mod assessments;
 pub mod assets;
 pub mod auth;
@@ -48,4 +49,29 @@ pub fn router() -> Router<Arc<AppState>> {
         // Schedules
         .route("/schedules", post(schedules::create_schedule_handler))
         .route("/schedules", get(schedules::list_schedules_handler))
+        // Operator Agent Management (Tenant-Scoped)
+        .route(
+            "/agents/tokens",
+            post(agents::create_enrollment_token_handler),
+        )
+        .route("/agents", get(agents::list_agents_handler))
+        .route("/agents/:id", get(agents::get_agent_handler))
+        .route("/agents/:id/revoke", post(agents::revoke_agent_handler))
+        // Outbound Agent Communication
+        .route("/agent/enroll", post(agents::agent_enroll_handler))
+        .route("/agent/heartbeat", post(agents::agent_heartbeat_handler))
+        .route("/agent/jobs/poll", post(agents::agent_poll_jobs_handler))
+        .route(
+            "/agent/jobs/:id/heartbeat",
+            post(agents::agent_job_heartbeat_handler),
+        )
+        .route(
+            "/agent/jobs/:id/results",
+            post(agents::agent_submit_results_handler),
+        )
+        .route("/agent/jobs/:id/fail", post(agents::agent_fail_job_handler))
+        .route(
+            "/agent/rotate-credentials",
+            post(agents::agent_rotate_credentials_handler),
+        )
 }

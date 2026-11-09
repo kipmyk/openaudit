@@ -9,8 +9,8 @@ use std::fmt;
 use uuid::Uuid;
 
 pub use models::{
-    AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset, JobStatus, NewFinding,
-    Organization, RevokedToken, Role, User,
+    AgentEnrollmentToken, AgentStatus, AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset,
+    EnrolledAgent, JobStatus, NewFinding, Organization, RevokedToken, Role, User,
 };
 
 /// Errors originating from the persistence layer.
@@ -152,4 +152,84 @@ pub trait ControlPlaneStore: Send + Sync + 'static {
 
     // --- Interrupted Job Recovery ---
     async fn recover_interrupted_jobs(&self) -> Result<usize, StoreError>;
+
+    // --- Agent Enrollment & Management ---
+    async fn issue_agent_enrollment_token(
+        &self,
+        org_id: Uuid,
+        token_secret: &str,
+        machine_id: Option<&str>,
+        challenge_nonce: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<AgentEnrollmentToken, StoreError>;
+    async fn get_agent_enrollment_token(
+        &self,
+        token_id: Uuid,
+    ) -> Result<Option<AgentEnrollmentToken>, StoreError>;
+    async fn consume_enrollment_token(&self, token_id: Uuid) -> Result<(), StoreError>;
+    async fn enroll_agent(
+        &self,
+        org_id: Uuid,
+        machine_id: &str,
+        hostname: &str,
+        agent_version: &str,
+        auth_token_hash: &str,
+        public_identity: &str,
+        capabilities: &str,
+    ) -> Result<EnrolledAgent, StoreError>;
+    async fn get_agent_by_id(
+        &self,
+        org_id: Uuid,
+        agent_id: Uuid,
+    ) -> Result<Option<EnrolledAgent>, StoreError>;
+    async fn get_agent_by_auth_hash(
+        &self,
+        auth_token_hash: &str,
+    ) -> Result<Option<EnrolledAgent>, StoreError>;
+    async fn list_agents(&self, org_id: Uuid) -> Result<Vec<EnrolledAgent>, StoreError>;
+    async fn update_agent_status(
+        &self,
+        org_id: Uuid,
+        agent_id: Uuid,
+        status: AgentStatus,
+    ) -> Result<(), StoreError>;
+    async fn update_agent_heartbeat(
+        &self,
+        agent_id: Uuid,
+        last_seen_at: DateTime<Utc>,
+    ) -> Result<(), StoreError>;
+    async fn rotate_agent_credential(
+        &self,
+        agent_id: Uuid,
+        new_auth_hash: &str,
+    ) -> Result<(), StoreError>;
+
+    // --- Distributed Job Claim & Dispatch ---
+    async fn claim_next_pending_job(
+        &self,
+        agent_id: Uuid,
+        org_id: Uuid,
+        lease_duration_secs: i64,
+    ) -> Result<Option<AssessmentJob>, StoreError>;
+    async fn renew_job_lease(
+        &self,
+        agent_id: Uuid,
+        job_id: Uuid,
+        lease_duration_secs: i64,
+    ) -> Result<bool, StoreError>;
+    async fn complete_agent_job(
+        &self,
+        agent_id: Uuid,
+        job_id: Uuid,
+        org_id: Uuid,
+        summary_json: Option<&str>,
+        findings: &[NewFinding],
+    ) -> Result<(), StoreError>;
+    async fn fail_agent_job(
+        &self,
+        agent_id: Uuid,
+        job_id: Uuid,
+        org_id: Uuid,
+        error_message: &str,
+    ) -> Result<(), StoreError>;
 }

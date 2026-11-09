@@ -6,6 +6,26 @@
 //! 1. Executing the 4-state TPM 2.0 provisioning lifecycle (§7.1).
 //! 2. Constructing canonical 14-element enrollment transcripts with HMAC-SHA256 proofs (§7.2).
 //! 3. Constructing 5-element canonical outbox retrieval requests with single-use nonces (§7.3).
+//! 4. Outbound HTTPS agent communication, enrollment, and distributed job execution (M6).
+
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::significant_drop_tightening,
+    clippy::too_many_lines,
+    clippy::struct_excessive_bools,
+    clippy::result_large_err,
+    clippy::must_use_candidate,
+    clippy::doc_markdown,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::too_many_arguments,
+    clippy::unused_async,
+    clippy::unused_self,
+    clippy::unnecessary_wraps,
+    clippy::missing_const_for_fn
+)]
+
+pub mod client;
 
 use std::env;
 use std::fs;
@@ -248,6 +268,8 @@ fn print_help() {
           retrieve             Assemble 5-element retrieval request (89 bytes) and sign HMAC proof\n  \
           enroll-tls           Perform attestation and enrollment over TLS 1.3\n  \
           retrieve-tls         Retrieve assessment catalog over TLS 1.3 with replay protection\n  \
+          daemon               Run outbound agent daemon polling for assessment jobs (M6)\n  \
+          poll-once            Run a single outbound poll and assessment execution iteration (M6)\n  \
           version              Print version information\n  \
           help                 Print this help message\n\n\
         Options:\n  \
@@ -1062,6 +1084,216 @@ fn prepare_retrieval_request(
     Ok((msg, raw_payload.to_vec(), proof))
 }
 
+#[allow(clippy::too_many_lines)]
+fn run_daemon(args: &[String]) -> Result<(), String> {
+    let mut server_url = "http://127.0.0.1:8080".to_string();
+    let mut state_dir = PathBuf::from("./agent_state");
+    let mut token_id_opt: Option<uuid::Uuid> = None;
+    let mut token_secret_opt: Option<String> = None;
+    let mut nonce_opt: Option<String> = None;
+    let mut poll_secs: u64 = 5;
+    let mut hb_secs: u64 = 15;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--server" | "--server-url" => {
+                i += 1;
+                if i < args.len() {
+                    server_url.clone_from(&args[i]);
+                }
+            }
+            "--state-dir" => {
+                i += 1;
+                if i < args.len() {
+                    state_dir = PathBuf::from(&args[i]);
+                }
+            }
+            "--token-id" => {
+                i += 1;
+                if i < args.len() {
+                    token_id_opt = uuid::Uuid::parse_str(&args[i]).ok();
+                }
+            }
+            "--token-secret" => {
+                i += 1;
+                if i < args.len() {
+                    token_secret_opt = Some(args[i].clone());
+                }
+            }
+            "--nonce" => {
+                i += 1;
+                if i < args.len() {
+                    nonce_opt = Some(args[i].clone());
+                }
+            }
+            "--poll-interval" => {
+                i += 1;
+                if i < args.len() {
+                    if let Ok(v) = args[i].parse::<u64>() {
+                        poll_secs = v;
+                    }
+                }
+            }
+            "--heartbeat-interval" => {
+                i += 1;
+                if i < args.len() {
+                    if let Ok(v) = args[i].parse::<u64>() {
+                        hb_secs = v;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let config = client::AgentDaemonConfig {
+        server_url,
+        state_dir,
+        heartbeat_interval_secs: hb_secs,
+        poll_interval_secs: poll_secs,
+        max_backoff_secs: 30,
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to initialize tokio runtime: {e}"))?;
+
+    rt.block_on(async {
+        let mut agent_client = client::AgentClient::new(config)?;
+
+        // If not enrolled and enrollment params provided, enroll now
+        if !agent_client.is_enrolled() {
+            if let (Some(token_id), Some(token_secret), Some(nonce)) =
+                (token_id_opt, token_secret_opt, nonce_opt)
+            {
+                println!("[Agent] Enrolling agent with control plane...");
+                let creds = agent_client.enroll(token_id, &token_secret, &nonce).await?;
+                println!(
+                    "[Agent] Enrollment successful! Agent ID: {}",
+                    creds.agent_id
+                );
+            } else {
+                return Err(
+                    "agent is not enrolled and missing --token-id, --token-secret, or --nonce"
+                        .to_string(),
+                );
+            }
+        }
+
+        println!("[Agent] Daemon started. Polling outbound for assessment jobs...");
+
+        let running = agent_client.shutdown_handle();
+        let mut backoff_secs = 1u64;
+
+        while running.load(std::sync::atomic::Ordering::SeqCst) {
+            match agent_client.run_once().await {
+                Ok(_) => {
+                    backoff_secs = 1;
+                    tokio::time::sleep(std::time::Duration::from_secs(poll_secs)).await;
+                }
+                Err(err) if err.contains("agent_revoked") => {
+                    eprintln!(
+                        "[Agent] CRITICAL: Agent has been revoked by control plane. Exiting."
+                    );
+                    return Err(err);
+                }
+                Err(err) => {
+                    eprintln!("[Agent] Communication error: {err}. Retrying in {backoff_secs}s...");
+                    tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                    backoff_secs = (backoff_secs * 2).min(30);
+                }
+            }
+        }
+
+        println!("[Agent] Daemon shut down cleanly.");
+        Ok(())
+    })
+}
+
+fn run_poll_once(args: &[String]) -> Result<(), String> {
+    let mut server_url = "http://127.0.0.1:8080".to_string();
+    let mut state_dir = PathBuf::from("./agent_state");
+    let mut token_id_opt: Option<uuid::Uuid> = None;
+    let mut token_secret_opt: Option<String> = None;
+    let mut nonce_opt: Option<String> = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--server" | "--server-url" => {
+                i += 1;
+                if i < args.len() {
+                    server_url.clone_from(&args[i]);
+                }
+            }
+            "--state-dir" => {
+                i += 1;
+                if i < args.len() {
+                    state_dir = PathBuf::from(&args[i]);
+                }
+            }
+            "--token-id" => {
+                i += 1;
+                if i < args.len() {
+                    token_id_opt = uuid::Uuid::parse_str(&args[i]).ok();
+                }
+            }
+            "--token-secret" => {
+                i += 1;
+                if i < args.len() {
+                    token_secret_opt = Some(args[i].clone());
+                }
+            }
+            "--nonce" => {
+                i += 1;
+                if i < args.len() {
+                    nonce_opt = Some(args[i].clone());
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let config = client::AgentDaemonConfig {
+        server_url,
+        state_dir,
+        heartbeat_interval_secs: 15,
+        poll_interval_secs: 5,
+        max_backoff_secs: 30,
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("failed to initialize tokio runtime: {e}"))?;
+
+    rt.block_on(async {
+        let mut agent_client = client::AgentClient::new(config)?;
+
+        if !agent_client.is_enrolled() {
+            if let (Some(token_id), Some(token_secret), Some(nonce)) =
+                (token_id_opt, token_secret_opt, nonce_opt)
+            {
+                let creds = agent_client.enroll(token_id, &token_secret, &nonce).await?;
+                println!("ENROLL_SUCCESS: {}", creds.agent_id);
+            } else {
+                return Err(
+                    "agent is not enrolled and missing --token-id, --token-secret, or --nonce"
+                        .to_string(),
+                );
+            }
+        }
+
+        let ran = agent_client.run_once().await?;
+        println!("POLL_SUCCESS: job_executed={ran}");
+        Ok(())
+    })
+}
+
 /// Dispatches command line arguments to subcommands.
 ///
 /// # Errors
@@ -1086,6 +1318,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         "retrieve" => run_retrieve(&args[2..]),
         "enroll-tls" => run_enroll_tls(&args[2..]),
         "retrieve-tls" => run_retrieve_tls(&args[2..]),
+        "daemon" => run_daemon(&args[2..]),
+        "poll-once" => run_poll_once(&args[2..]),
         other => Err(format!("unknown command: '{other}'")),
     }
 }

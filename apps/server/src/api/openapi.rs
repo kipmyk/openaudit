@@ -120,6 +120,44 @@ pub async fn openapi_json_handler() -> Response {
                     "security": [{ "BearerAuth": [] }],
                     "responses": { "201": { "description": "Schedule created" } }
                 }
+            },
+            "/agents/tokens": {
+                "post": {
+                    "summary": "Issue one-time agent enrollment token (Admin/Auditor)",
+                    "security": [{ "BearerAuth": [] }],
+                    "responses": { "201": { "description": "Enrollment token issued" } }
+                }
+            },
+            "/agents": {
+                "get": {
+                    "summary": "List enrolled agents in tenant fleet",
+                    "security": [{ "BearerAuth": [] }],
+                    "responses": { "200": { "description": "List of enrolled agents" } }
+                }
+            },
+            "/agent/enroll": {
+                "post": {
+                    "summary": "Outbound agent enrollment challenge verification",
+                    "responses": { "201": { "description": "Agent enrolled and credentials issued" } }
+                }
+            },
+            "/agent/heartbeat": {
+                "post": {
+                    "summary": "Outbound agent heartbeat and connectivity status",
+                    "responses": { "200": { "description": "Heartbeat acknowledged" } }
+                }
+            },
+            "/agent/jobs/poll": {
+                "post": {
+                    "summary": "Outbound agent job poll and atomic claim",
+                    "responses": { "200": { "description": "Next claimable job or null" } }
+                }
+            },
+            "/agent/jobs/{id}/results": {
+                "post": {
+                    "summary": "Submit structured findings and complete job",
+                    "responses": { "200": { "description": "Results recorded" } }
+                }
             }
         },
         "components": {

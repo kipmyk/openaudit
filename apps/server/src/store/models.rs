@@ -143,6 +143,74 @@ impl JobStatus {
     }
 }
 
+/// Status classification of an enrolled agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentStatus {
+    Pending,
+    Active,
+    Revoked,
+}
+
+impl AgentStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Active => "active",
+            Self::Revoked => "revoked",
+        }
+    }
+
+    /// Parses string representation into `AgentStatus`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if string is not a valid status.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s.to_lowercase().as_str() {
+            "pending" => Ok(Self::Pending),
+            "active" => Ok(Self::Active),
+            "revoked" => Ok(Self::Revoked),
+            other => Err(format!("Unknown agent status '{other}'")),
+        }
+    }
+}
+
+/// Enrolled agent record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrolledAgent {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    pub machine_id: String,
+    pub hostname: String,
+    pub agent_version: String,
+    pub status: AgentStatus,
+    #[serde(skip_serializing)]
+    pub auth_token_hash: String,
+    pub public_identity: String,
+    pub capabilities: String,
+    pub last_seen_at: DateTime<Utc>,
+    pub enrolled_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One-time agent enrollment token record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentEnrollmentToken {
+    pub id: Uuid,
+    pub org_id: Uuid,
+    #[serde(skip_serializing)]
+    pub token_secret: String,
+    pub machine_id: Option<String>,
+    pub challenge_nonce: String,
+    pub expires_at: DateTime<Utc>,
+    pub used_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// Asynchronous assessment job record.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssessmentJob {
@@ -158,6 +226,10 @@ pub struct AssessmentJob {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    pub assigned_agent_id: Option<Uuid>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub execution_source: String,
+    pub rules_subset: Option<String>,
 }
 
 /// Discovered security finding record.

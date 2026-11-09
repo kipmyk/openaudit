@@ -7,8 +7,8 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use super::models::{
-    AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset, JobStatus, NewFinding,
-    Organization, Role, User,
+    AgentEnrollmentToken, AgentStatus, AssessmentFinding, AssessmentJob, AssessmentSchedule, Asset,
+    EnrolledAgent, JobStatus, NewFinding, Organization, Role, User,
 };
 use super::{ControlPlaneStore, StoreError};
 
@@ -118,8 +118,13 @@ impl SqliteControlPlaneStore {
                 started_at TEXT,
                 completed_at TEXT,
                 created_at TEXT NOT NULL,
+                assigned_agent_id TEXT,
+                lease_expires_at TEXT,
+                execution_source TEXT NOT NULL DEFAULT 'server',
+                rules_subset TEXT,
                 FOREIGN KEY(org_id) REFERENCES organizations(id) ON DELETE CASCADE,
-                FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE SET NULL
+                FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE SET NULL,
+                FOREIGN KEY(assigned_agent_id) REFERENCES enrolled_agents(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS assessment_findings (
@@ -168,9 +173,59 @@ impl SqliteControlPlaneStore {
                 revoked_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_revoked_tokens_exp ON revoked_tokens(expires_at);
+
+            CREATE TABLE IF NOT EXISTS agent_enrollment_tokens (
+                id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL,
+                token_secret TEXT NOT NULL,
+                machine_id TEXT,
+                challenge_nonce TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(org_id) REFERENCES organizations(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS enrolled_agents (
+                id TEXT PRIMARY KEY,
+                org_id TEXT NOT NULL,
+                machine_id TEXT NOT NULL,
+                hostname TEXT NOT NULL,
+                agent_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                auth_token_hash TEXT NOT NULL,
+                public_identity TEXT NOT NULL,
+                capabilities TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                enrolled_at TEXT NOT NULL,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(org_id, machine_id),
+                FOREIGN KEY(org_id) REFERENCES organizations(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agents_org_status ON enrolled_agents(org_id, status);
+            CREATE INDEX IF NOT EXISTS idx_agents_auth_hash ON enrolled_agents(auth_token_hash);
+            CREATE INDEX IF NOT EXISTS idx_agent_tokens_lookup ON agent_enrollment_tokens(id, expires_at);
             ",
         )
         .map_err(|e| StoreError::Database(format!("schema migration failed: {e}")))?;
+
+        // Ensure columns exist on pre-existing assessment_jobs tables
+        let _ = conn.execute(
+            "ALTER TABLE assessment_jobs ADD COLUMN assigned_agent_id TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE assessment_jobs ADD COLUMN lease_expires_at TEXT",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE assessment_jobs ADD COLUMN execution_source TEXT NOT NULL DEFAULT 'server'", []);
+        let _ = conn.execute(
+            "ALTER TABLE assessment_jobs ADD COLUMN rules_subset TEXT",
+            [],
+        );
 
         Ok(())
     }
@@ -816,6 +871,10 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             started_at: None,
             completed_at: None,
             created_at: now,
+            assigned_agent_id: None,
+            lease_expires_at: None,
+            execution_source: "server".to_string(),
+            rules_subset: None,
         })
     }
 
@@ -827,7 +886,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, org_id, asset_id, target, assessment_type, profile, status,
-                        summary_json, error_message, started_at, completed_at, created_at
+                        summary_json, error_message, started_at, completed_at, created_at,
+                        assigned_agent_id, lease_expires_at, execution_source, rules_subset
                  FROM assessment_jobs WHERE org_id = ?1 AND id = ?2",
             )
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -847,6 +907,10 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                     row.get::<_, Option<String>>(9)?,
                     row.get::<_, Option<String>>(10)?,
                     row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
                 ))
             })
             .optional()
@@ -866,6 +930,10 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                 start_opt,
                 end_opt,
                 created_str,
+                agent_opt,
+                lease_opt,
+                source_opt,
+                rules_opt,
             )) => {
                 let status = JobStatus::parse(&status_str).map_err(StoreError::Database)?;
                 Ok(Some(AssessmentJob {
@@ -900,6 +968,19 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                     created_at: DateTime::parse_from_rfc3339(&created_str)
                         .map(|d| d.with_timezone(&Utc))
                         .map_err(|e| StoreError::Database(e.to_string()))?,
+                    assigned_agent_id: agent_opt
+                        .map(|s| Uuid::parse_str(&s))
+                        .transpose()
+                        .map_err(|e| StoreError::Database(e.to_string()))?,
+                    lease_expires_at: lease_opt
+                        .map(|s| {
+                            DateTime::parse_from_rfc3339(&s)
+                                .map(|d| d.with_timezone(&Utc))
+                                .map_err(|e| StoreError::Database(e.to_string()))
+                        })
+                        .transpose()?,
+                    execution_source: source_opt.unwrap_or_else(|| "server".to_string()),
+                    rules_subset: rules_opt,
                 }))
             }
             None => Ok(None),
@@ -1000,7 +1081,8 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         let mut stmt = conn
             .prepare(
                 "SELECT id, org_id, asset_id, target, assessment_type, profile, status,
-                        summary_json, error_message, started_at, completed_at, created_at
+                        summary_json, error_message, started_at, completed_at, created_at,
+                        assigned_agent_id, lease_expires_at, execution_source, rules_subset
                  FROM assessment_jobs WHERE org_id = ?1 ORDER BY created_at DESC LIMIT ?2",
             )
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1020,6 +1102,10 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                     row.get::<_, Option<String>>(9)?,
                     row.get::<_, Option<String>>(10)?,
                     row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
                 ))
             })
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1039,6 +1125,10 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                 start_opt,
                 end_opt,
                 created_str,
+                agent_opt,
+                lease_opt,
+                source_opt,
+                rules_opt,
             ) = r.map_err(|e| StoreError::Database(e.to_string()))?;
             let status = JobStatus::parse(&status_str).map_err(StoreError::Database)?;
             jobs.push(AssessmentJob {
@@ -1072,6 +1162,19 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                 created_at: DateTime::parse_from_rfc3339(&created_str)
                     .map(|d| d.with_timezone(&Utc))
                     .map_err(|e| StoreError::Database(e.to_string()))?,
+                assigned_agent_id: agent_opt
+                    .map(|s| Uuid::parse_str(&s))
+                    .transpose()
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                lease_expires_at: lease_opt
+                    .map(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|d| d.with_timezone(&Utc))
+                            .map_err(|e| StoreError::Database(e.to_string()))
+                    })
+                    .transpose()?,
+                execution_source: source_opt.unwrap_or_else(|| "server".to_string()),
+                rules_subset: rules_opt,
             });
         }
         Ok(jobs)
@@ -1553,6 +1656,802 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(count)
     }
+
+    async fn issue_agent_enrollment_token(
+        &self,
+        org_id: Uuid,
+        token_secret: &str,
+        machine_id: Option<&str>,
+        challenge_nonce: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<AgentEnrollmentToken, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+
+        conn.execute(
+            "INSERT INTO agent_enrollment_tokens (id, org_id, token_secret, machine_id, challenge_nonce, expires_at, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                id.to_string(),
+                org_id.to_string(),
+                token_secret,
+                machine_id,
+                challenge_nonce,
+                expires_at.to_rfc3339(),
+                now.to_rfc3339(),
+            ],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(AgentEnrollmentToken {
+            id,
+            org_id,
+            token_secret: token_secret.to_string(),
+            machine_id: machine_id.map(ToString::to_string),
+            challenge_nonce: challenge_nonce.to_string(),
+            expires_at,
+            used_at: None,
+            created_at: now,
+        })
+    }
+
+    async fn get_agent_enrollment_token(
+        &self,
+        token_id: Uuid,
+    ) -> Result<Option<AgentEnrollmentToken>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, org_id, token_secret, machine_id, challenge_nonce, expires_at, used_at, created_at
+                 FROM agent_enrollment_tokens WHERE id = ?1",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let row = stmt
+            .query_row(params![token_id.to_string()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
+                    r.get::<_, String>(7)?,
+                ))
+            })
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        row.map(
+            |(id_str, org_str, secret, machine, nonce, exp_str, used_str, created_str)| {
+                Ok(AgentEnrollmentToken {
+                    id: Uuid::parse_str(&id_str)
+                        .map_err(|e| StoreError::Database(e.to_string()))?,
+                    org_id: Uuid::parse_str(&org_str)
+                        .map_err(|e| StoreError::Database(e.to_string()))?,
+                    token_secret: secret,
+                    machine_id: machine,
+                    challenge_nonce: nonce,
+                    expires_at: DateTime::parse_from_rfc3339(&exp_str)
+                        .map(|d| d.with_timezone(&Utc))
+                        .map_err(|e| StoreError::Database(e.to_string()))?,
+                    used_at: used_str
+                        .map(|s| {
+                            DateTime::parse_from_rfc3339(&s)
+                                .map(|d| d.with_timezone(&Utc))
+                                .map_err(|e| StoreError::Database(e.to_string()))
+                        })
+                        .transpose()?,
+                    created_at: DateTime::parse_from_rfc3339(&created_str)
+                        .map(|d| d.with_timezone(&Utc))
+                        .map_err(|e| StoreError::Database(e.to_string()))?,
+                })
+            },
+        )
+        .transpose()
+    }
+
+    async fn consume_enrollment_token(&self, token_id: Uuid) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let now_str = Utc::now().to_rfc3339();
+        let rows = conn
+            .execute(
+                "UPDATE agent_enrollment_tokens
+                 SET used_at = ?1
+                 WHERE id = ?2 AND used_at IS NULL AND expires_at > ?1",
+                params![now_str, token_id.to_string()],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if rows == 0 {
+            return Err(StoreError::Conflict(
+                "Enrollment token is invalid, expired, or already used".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn enroll_agent(
+        &self,
+        org_id: Uuid,
+        machine_id: &str,
+        hostname: &str,
+        agent_version: &str,
+        auth_token_hash: &str,
+        public_identity: &str,
+        capabilities: &str,
+    ) -> Result<EnrolledAgent, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+        let fresh_id = Uuid::new_v4().to_string();
+
+        conn.execute(
+            "INSERT INTO enrolled_agents (id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?9, ?9, ?9)
+             ON CONFLICT(org_id, machine_id) DO UPDATE SET
+                 hostname = excluded.hostname,
+                 agent_version = excluded.agent_version,
+                 status = 'active',
+                 auth_token_hash = excluded.auth_token_hash,
+                 public_identity = excluded.public_identity,
+                 capabilities = excluded.capabilities,
+                 last_seen_at = excluded.last_seen_at,
+                 enrolled_at = excluded.enrolled_at,
+                 revoked_at = NULL,
+                 updated_at = excluded.updated_at",
+            params![
+                fresh_id,
+                org_id.to_string(),
+                machine_id,
+                hostname,
+                agent_version,
+                auth_token_hash,
+                public_identity,
+                capabilities,
+                now_str,
+            ],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // Retrieve the enrolled record
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, revoked_at, created_at, updated_at
+                 FROM enrolled_agents WHERE org_id = ?1 AND machine_id = ?2",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let r = stmt
+            .query_row(params![org_id.to_string(), machine_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, String>(13)?,
+                ))
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let status = AgentStatus::parse(&r.5).map_err(StoreError::Database)?;
+
+        Ok(EnrolledAgent {
+            id: Uuid::parse_str(&r.0).map_err(|e| StoreError::Database(e.to_string()))?,
+            org_id: Uuid::parse_str(&r.1).map_err(|e| StoreError::Database(e.to_string()))?,
+            machine_id: r.2,
+            hostname: r.3,
+            agent_version: r.4,
+            status,
+            auth_token_hash: r.6,
+            public_identity: r.7,
+            capabilities: r.8,
+            last_seen_at: DateTime::parse_from_rfc3339(&r.9)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+            enrolled_at: DateTime::parse_from_rfc3339(&r.10)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+            revoked_at: r
+                .11
+                .map(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|d| d.with_timezone(&Utc))
+                        .map_err(|e| StoreError::Database(e.to_string()))
+                })
+                .transpose()?,
+            created_at: DateTime::parse_from_rfc3339(&r.12)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+            updated_at: DateTime::parse_from_rfc3339(&r.13)
+                .map(|d| d.with_timezone(&Utc))
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+        })
+    }
+
+    async fn get_agent_by_id(
+        &self,
+        org_id: Uuid,
+        agent_id: Uuid,
+    ) -> Result<Option<EnrolledAgent>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, revoked_at, created_at, updated_at
+                 FROM enrolled_agents WHERE org_id = ?1 AND id = ?2",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let row = stmt
+            .query_row(params![org_id.to_string(), agent_id.to_string()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, String>(12)?,
+                    r.get::<_, String>(13)?,
+                ))
+            })
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        row.map(|r| {
+            let status = AgentStatus::parse(&r.5).map_err(StoreError::Database)?;
+            Ok(EnrolledAgent {
+                id: Uuid::parse_str(&r.0).map_err(|e| StoreError::Database(e.to_string()))?,
+                org_id: Uuid::parse_str(&r.1).map_err(|e| StoreError::Database(e.to_string()))?,
+                machine_id: r.2,
+                hostname: r.3,
+                agent_version: r.4,
+                status,
+                auth_token_hash: r.6,
+                public_identity: r.7,
+                capabilities: r.8,
+                last_seen_at: DateTime::parse_from_rfc3339(&r.9)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                enrolled_at: DateTime::parse_from_rfc3339(&r.10)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                revoked_at: r
+                    .11
+                    .map(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|d| d.with_timezone(&Utc))
+                            .map_err(|e| StoreError::Database(e.to_string()))
+                    })
+                    .transpose()?,
+                created_at: DateTime::parse_from_rfc3339(&r.12)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                updated_at: DateTime::parse_from_rfc3339(&r.13)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn get_agent_by_auth_hash(
+        &self,
+        auth_token_hash: &str,
+    ) -> Result<Option<EnrolledAgent>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, revoked_at, created_at, updated_at
+                 FROM enrolled_agents WHERE auth_token_hash = ?1",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let row = stmt
+            .query_row(params![auth_token_hash], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, String>(12)?,
+                    r.get::<_, String>(13)?,
+                ))
+            })
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        row.map(|r| {
+            let status = AgentStatus::parse(&r.5).map_err(StoreError::Database)?;
+            Ok(EnrolledAgent {
+                id: Uuid::parse_str(&r.0).map_err(|e| StoreError::Database(e.to_string()))?,
+                org_id: Uuid::parse_str(&r.1).map_err(|e| StoreError::Database(e.to_string()))?,
+                machine_id: r.2,
+                hostname: r.3,
+                agent_version: r.4,
+                status,
+                auth_token_hash: r.6,
+                public_identity: r.7,
+                capabilities: r.8,
+                last_seen_at: DateTime::parse_from_rfc3339(&r.9)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                enrolled_at: DateTime::parse_from_rfc3339(&r.10)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                revoked_at: r
+                    .11
+                    .map(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|d| d.with_timezone(&Utc))
+                            .map_err(|e| StoreError::Database(e.to_string()))
+                    })
+                    .transpose()?,
+                created_at: DateTime::parse_from_rfc3339(&r.12)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                updated_at: DateTime::parse_from_rfc3339(&r.13)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn list_agents(&self, org_id: Uuid) -> Result<Vec<EnrolledAgent>, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, org_id, machine_id, hostname, agent_version, status, auth_token_hash, public_identity, capabilities, last_seen_at, enrolled_at, revoked_at, created_at, updated_at
+                 FROM enrolled_agents WHERE org_id = ?1 ORDER BY enrolled_at DESC",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map(params![org_id.to_string()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, String>(12)?,
+                    r.get::<_, String>(13)?,
+                ))
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let mut agents = Vec::new();
+        for row in rows {
+            let r = row.map_err(|e| StoreError::Database(e.to_string()))?;
+            let status = AgentStatus::parse(&r.5).map_err(StoreError::Database)?;
+            agents.push(EnrolledAgent {
+                id: Uuid::parse_str(&r.0).map_err(|e| StoreError::Database(e.to_string()))?,
+                org_id: Uuid::parse_str(&r.1).map_err(|e| StoreError::Database(e.to_string()))?,
+                machine_id: r.2,
+                hostname: r.3,
+                agent_version: r.4,
+                status,
+                auth_token_hash: r.6,
+                public_identity: r.7,
+                capabilities: r.8,
+                last_seen_at: DateTime::parse_from_rfc3339(&r.9)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                enrolled_at: DateTime::parse_from_rfc3339(&r.10)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                revoked_at: r
+                    .11
+                    .map(|s| {
+                        DateTime::parse_from_rfc3339(&s)
+                            .map(|d| d.with_timezone(&Utc))
+                            .map_err(|e| StoreError::Database(e.to_string()))
+                    })
+                    .transpose()?,
+                created_at: DateTime::parse_from_rfc3339(&r.12)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+                updated_at: DateTime::parse_from_rfc3339(&r.13)
+                    .map(|d| d.with_timezone(&Utc))
+                    .map_err(|e| StoreError::Database(e.to_string()))?,
+            });
+        }
+        Ok(agents)
+    }
+
+    async fn update_agent_status(
+        &self,
+        org_id: Uuid,
+        agent_id: Uuid,
+        status: AgentStatus,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let now_str = Utc::now().to_rfc3339();
+        let revoked_str = if status == AgentStatus::Revoked {
+            Some(now_str.clone())
+        } else {
+            None
+        };
+
+        let rows = conn
+            .execute(
+                "UPDATE enrolled_agents
+                 SET status = ?1,
+                     revoked_at = COALESCE(?2, revoked_at),
+                     updated_at = ?3
+                 WHERE org_id = ?4 AND id = ?5",
+                params![
+                    status.as_str(),
+                    revoked_str,
+                    now_str,
+                    org_id.to_string(),
+                    agent_id.to_string(),
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if rows == 0 {
+            return Err(StoreError::NotFound(format!("Agent {agent_id} not found")));
+        }
+
+        Ok(())
+    }
+
+    async fn update_agent_heartbeat(
+        &self,
+        agent_id: Uuid,
+        last_seen_at: DateTime<Utc>,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let now_str = last_seen_at.to_rfc3339();
+        conn.execute(
+            "UPDATE enrolled_agents
+             SET last_seen_at = ?1,
+                 updated_at = ?1
+             WHERE id = ?2",
+            params![now_str, agent_id.to_string()],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn rotate_agent_credential(
+        &self,
+        agent_id: Uuid,
+        new_auth_hash: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let now_str = Utc::now().to_rfc3339();
+        let rows = conn
+            .execute(
+                "UPDATE enrolled_agents
+                 SET auth_token_hash = ?1,
+                     updated_at = ?2
+                 WHERE id = ?3 AND status = 'active'",
+                params![new_auth_hash, now_str, agent_id.to_string()],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if rows == 0 {
+            return Err(StoreError::NotFound(format!(
+                "Active agent {agent_id} not found for credential rotation"
+            )));
+        }
+
+        Ok(())
+    }
+
+    async fn claim_next_pending_job(
+        &self,
+        agent_id: Uuid,
+        org_id: Uuid,
+        lease_duration_secs: i64,
+    ) -> Result<Option<AssessmentJob>, StoreError> {
+        let job_id_res: Result<Option<Uuid>, StoreError> = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let now = Utc::now();
+            let now_str = now.to_rfc3339();
+            let lease_expiry = now + chrono::Duration::seconds(lease_duration_secs);
+            let lease_expiry_str = lease_expiry.to_rfc3339();
+
+            // 1. Find oldest claimable job
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id
+                     FROM assessment_jobs
+                     WHERE org_id = ?1
+                       AND (
+                           status = 'pending'
+                           OR (status = 'running' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?2)
+                       )
+                     ORDER BY created_at ASC
+                     LIMIT 1",
+                )
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let candidate_id: Option<String> = stmt
+                .query_row(params![org_id.to_string(), now_str], |row| row.get(0))
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            let Some(job_id_str) = candidate_id else {
+                return Ok(None);
+            };
+
+            // 2. Atomically claim the job
+            let rows = conn
+                .execute(
+                    "UPDATE assessment_jobs
+                     SET status = 'running',
+                         assigned_agent_id = ?1,
+                         execution_source = 'agent',
+                         started_at = COALESCE(started_at, ?2),
+                         lease_expires_at = ?3
+                     WHERE id = ?4",
+                    params![agent_id.to_string(), now_str, lease_expiry_str, job_id_str,],
+                )
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+
+            if rows == 0 {
+                return Ok(None);
+            }
+
+            let parsed_job_id =
+                Uuid::parse_str(&job_id_str).map_err(|e| StoreError::Database(e.to_string()))?;
+
+            Ok(Some(parsed_job_id))
+        };
+
+        if let Some(parsed_job_id) = job_id_res? {
+            self.get_job(org_id, parsed_job_id).await
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn renew_job_lease(
+        &self,
+        agent_id: Uuid,
+        job_id: Uuid,
+        lease_duration_secs: i64,
+    ) -> Result<bool, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let now = Utc::now();
+        let lease_expiry = now + chrono::Duration::seconds(lease_duration_secs);
+        let lease_expiry_str = lease_expiry.to_rfc3339();
+
+        let modified = conn
+            .execute(
+                "UPDATE assessment_jobs
+                 SET lease_expires_at = ?1
+                 WHERE id = ?2 AND assigned_agent_id = ?3 AND status = 'running'",
+                params![lease_expiry_str, job_id.to_string(), agent_id.to_string(),],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(modified > 0)
+    }
+
+    async fn complete_agent_job(
+        &self,
+        agent_id: Uuid,
+        job_id: Uuid,
+        org_id: Uuid,
+        summary_json: Option<&str>,
+        findings: &[NewFinding],
+    ) -> Result<(), StoreError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // 1. Verify job is currently assigned to this agent and running
+        let mut stmt = tx
+            .prepare(
+                "SELECT status, assigned_agent_id
+                 FROM assessment_jobs
+                 WHERE id = ?1 AND org_id = ?2",
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let row: Option<(String, Option<String>)> = stmt
+            .query_row(params![job_id.to_string(), org_id.to_string()], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let Some((current_status, assigned_agent_opt)) = row else {
+            return Err(StoreError::NotFound(format!("Job {job_id} not found")));
+        };
+
+        if assigned_agent_opt.as_deref() != Some(&agent_id.to_string()) {
+            return Err(StoreError::Unauthorized(format!(
+                "Job {job_id} is not assigned to agent {agent_id}"
+            )));
+        }
+
+        if current_status == "completed" {
+            // Idempotent duplicate submission
+            return Ok(());
+        }
+
+        if current_status != "running" {
+            return Err(StoreError::Conflict(format!(
+                "Job {job_id} is in status '{current_status}', not 'running'"
+            )));
+        }
+
+        drop(stmt);
+
+        // 2. Insert findings
+        let now_str = Utc::now().to_rfc3339();
+        for f in findings {
+            let finding_id = Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO assessment_findings (id, org_id, job_id, rule_id, severity, confidence, title, endpoint, evidence, remediation, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    finding_id,
+                    org_id.to_string(),
+                    job_id.to_string(),
+                    f.rule_id,
+                    f.severity,
+                    f.confidence,
+                    f.title,
+                    f.endpoint,
+                    f.evidence,
+                    f.recommendation,
+                    now_str,
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        }
+
+        // 3. Mark job completed
+        tx.execute(
+            "UPDATE assessment_jobs
+             SET status = 'completed',
+                 summary_json = ?1,
+                 completed_at = ?2,
+                 lease_expires_at = NULL
+             WHERE id = ?3",
+            params![summary_json, now_str, job_id.to_string()],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok(())
+    }
+
+    async fn fail_agent_job(
+        &self,
+        agent_id: Uuid,
+        job_id: Uuid,
+        org_id: Uuid,
+        error_message: &str,
+    ) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let now_str = Utc::now().to_rfc3339();
+        let rows = conn
+            .execute(
+                "UPDATE assessment_jobs
+                 SET status = 'failed',
+                     error_message = ?1,
+                     completed_at = ?2,
+                     lease_expires_at = NULL
+                 WHERE id = ?3 AND org_id = ?4 AND assigned_agent_id = ?5 AND status = 'running'",
+                params![
+                    error_message,
+                    now_str,
+                    job_id.to_string(),
+                    org_id.to_string(),
+                    agent_id.to_string(),
+                ],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if rows == 0 {
+            return Err(StoreError::Conflict(format!(
+                "Job {job_id} cannot be marked failed (not running or not assigned to agent {agent_id})"
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1730,5 +2629,197 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("interrupted by server restart"));
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_agent_lifecycle_and_dispatch() {
+        let store = SqliteControlPlaneStore::in_memory().expect("in-memory db");
+        let (org, _) = store
+            .bootstrap_admin(
+                "Agent Corp",
+                "agent-corp",
+                "Admin",
+                "admin@agentcorp.com",
+                "hash",
+            )
+            .await
+            .unwrap();
+
+        // 1. Issue one-time enrollment token
+        let token_secret = "secret-token-1234567890abcdef";
+        let challenge = "nonce-123456";
+        let expires = Utc::now() + chrono::Duration::minutes(10);
+        let token = store
+            .issue_agent_enrollment_token(org.id, token_secret, Some("node-01"), challenge, expires)
+            .await
+            .expect("Must issue token");
+
+        assert_eq!(token.org_id, org.id);
+        assert_eq!(token.machine_id.as_deref(), Some("node-01"));
+
+        let fetched_token = store
+            .get_agent_enrollment_token(token.id)
+            .await
+            .unwrap()
+            .expect("Token exists");
+        assert_eq!(fetched_token.token_secret, token_secret);
+
+        // Consume token
+        store
+            .consume_enrollment_token(token.id)
+            .await
+            .expect("Must consume");
+
+        // Double consume must fail
+        let double_consume = store.consume_enrollment_token(token.id).await;
+        assert!(matches!(double_consume, Err(StoreError::Conflict(_))));
+
+        // 2. Enroll Agent
+        let auth_hash = "agent_auth_hash_abcdef";
+        let agent = store
+            .enroll_agent(
+                org.id,
+                "node-01",
+                "worker-node-1.corp.internal",
+                "0.1.0-alpha.0",
+                auth_hash,
+                "spki-der-hex-1234",
+                r#"["host_audit","perimeter_scan"]"#,
+            )
+            .await
+            .expect("Must enroll agent");
+
+        assert_eq!(agent.status, AgentStatus::Active);
+        assert_eq!(agent.machine_id, "node-01");
+
+        // Lookup by ID and by Auth Hash
+        let by_id = store
+            .get_agent_by_id(org.id, agent.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_id.hostname, "worker-node-1.corp.internal");
+
+        let by_hash = store
+            .get_agent_by_auth_hash(auth_hash)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(by_hash.id, agent.id);
+
+        // List agents
+        let agents = store.list_agents(org.id).await.unwrap();
+        assert_eq!(agents.len(), 1);
+
+        // Update heartbeat
+        let heartbeat_time = Utc::now();
+        store
+            .update_agent_heartbeat(agent.id, heartbeat_time)
+            .await
+            .unwrap();
+
+        // Rotate credential
+        let new_hash = "rotated_auth_hash_987654";
+        store
+            .rotate_agent_credential(agent.id, new_hash)
+            .await
+            .unwrap();
+        assert!(store
+            .get_agent_by_auth_hash(auth_hash)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .get_agent_by_auth_hash(new_hash)
+            .await
+            .unwrap()
+            .is_some());
+
+        // 3. Job Claiming and Dispatch
+        let job = store
+            .create_job(org.id, None, "10.0.0.1", "host_audit", "cis_level_1")
+            .await
+            .unwrap();
+
+        // Agent 1 claims job
+        let claimed = store
+            .claim_next_pending_job(agent.id, org.id, 60)
+            .await
+            .unwrap()
+            .expect("Job should be claimed");
+
+        assert_eq!(claimed.id, job.id);
+        assert_eq!(claimed.status, JobStatus::Running);
+        assert_eq!(claimed.assigned_agent_id, Some(agent.id));
+        assert!(claimed.lease_expires_at.is_some());
+
+        // Second agent cannot claim the same job (no other pending jobs)
+        let other_agent_id = Uuid::new_v4();
+        let second_claim = store
+            .claim_next_pending_job(other_agent_id, org.id, 60)
+            .await
+            .unwrap();
+        assert!(second_claim.is_none(), "No pending jobs available");
+
+        // Renew lease
+        let renewed = store.renew_job_lease(agent.id, job.id, 120).await.unwrap();
+        assert!(renewed);
+
+        // 4. Complete Agent Job
+        let findings = vec![NewFinding {
+            rule_id: "agent.audit.file-perms".into(),
+            severity: "Medium".into(),
+            confidence: "Confirmed".into(),
+            title: "Insecure File Permissions".into(),
+            endpoint: "/etc/shadow".into(),
+            evidence: "Permissions 0644".into(),
+            recommendation: "chmod 0600".into(),
+        }];
+
+        store
+            .complete_agent_job(
+                agent.id,
+                job.id,
+                org.id,
+                Some(r#"{"compliant": false}"#),
+                &findings,
+            )
+            .await
+            .expect("Complete job must succeed");
+
+        let completed_job = store.get_job(org.id, job.id).await.unwrap().unwrap();
+        assert_eq!(completed_job.status, JobStatus::Completed);
+        assert!(completed_job.completed_at.is_some());
+
+        let job_findings = store
+            .list_findings(org.id, Some(job.id), None)
+            .await
+            .unwrap();
+        assert_eq!(job_findings.len(), 1);
+
+        // Idempotent completion does not fail
+        store
+            .complete_agent_job(
+                agent.id,
+                job.id,
+                org.id,
+                Some(r#"{"compliant": false}"#),
+                &findings,
+            )
+            .await
+            .expect("Duplicate complete must be idempotent");
+
+        // Revoke agent
+        store
+            .update_agent_status(org.id, agent.id, AgentStatus::Revoked)
+            .await
+            .unwrap();
+        let revoked = store
+            .get_agent_by_id(org.id, agent.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(revoked.status, AgentStatus::Revoked);
+        assert!(revoked.revoked_at.is_some());
     }
 }

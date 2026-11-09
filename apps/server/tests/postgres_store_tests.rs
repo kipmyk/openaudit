@@ -19,7 +19,7 @@ use chrono::{Duration, Utc};
 use std::env;
 use uuid::Uuid;
 
-use openaudit_server::store::models::{JobStatus, NewFinding, Role};
+use openaudit_server::store::models::{AgentStatus, JobStatus, NewFinding, Role};
 use openaudit_server::store::postgres::PostgresControlPlaneStore;
 use openaudit_server::store::{ControlPlaneStore, StoreError};
 
@@ -54,6 +54,19 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
     store.migrate().await.expect("Migration must be idempotent");
 
     // Clean tables for fresh test run
+    if let Ok((pg_client, connection)) =
+        tokio_postgres::connect(&pg_url, tokio_postgres::NoTls).await
+    {
+        tokio::spawn(async move {
+            let _ = connection.await;
+        });
+        let _ = pg_client
+            .batch_execute(
+                "TRUNCATE TABLE assessment_findings, assessment_jobs, assessment_schedules, assets, agent_enrollment_tokens, enrolled_agents, users, organizations CASCADE;",
+            )
+            .await;
+    }
+
     let org_suffix = Uuid::new_v4().to_string()[..8].to_string();
     let org_slug = format!("pg-tenant-{org_suffix}");
 
@@ -254,4 +267,84 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
         .as_deref()
         .unwrap()
         .contains("interrupted by server restart"));
+
+    // 11. Test Agent Enrollment and Distributed Dispatch in PostgreSQL
+    let token_sec = "pg-token-secret-12345";
+    let token = store
+        .issue_agent_enrollment_token(
+            org1.id,
+            token_sec,
+            Some("pg-node-01"),
+            "nonce-999",
+            Utc::now() + Duration::minutes(15),
+        )
+        .await
+        .expect("Must issue token in PG");
+    assert_eq!(token.org_id, org1.id);
+
+    store
+        .consume_enrollment_token(token.id)
+        .await
+        .expect("Must consume PG token");
+    let replay_err = store.consume_enrollment_token(token.id).await;
+    assert!(matches!(replay_err, Err(StoreError::Conflict(_))));
+
+    let auth_hash = "pg_agent_auth_hash_567";
+    let agent = store
+        .enroll_agent(
+            org1.id,
+            "pg-node-01",
+            "pg-worker.internal",
+            "0.1.0-alpha.0",
+            auth_hash,
+            "spki-der-pg",
+            r#"["host_audit","perimeter_scan"]"#,
+        )
+        .await
+        .expect("Must enroll agent in PG");
+    assert_eq!(agent.status, AgentStatus::Active);
+
+    let found_agent = store
+        .get_agent_by_auth_hash(auth_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found_agent.id, agent.id);
+
+    let pg_job = store
+        .create_job(org1.id, None, "10.10.10.1", "host_audit", "standard")
+        .await
+        .expect("Create PG job");
+
+    let claimed = store
+        .claim_next_pending_job(agent.id, org1.id, 60)
+        .await
+        .expect("Claim PG job")
+        .expect("Must claim");
+    assert_eq!(claimed.id, pg_job.id);
+    assert_eq!(claimed.assigned_agent_id, Some(agent.id));
+    assert_eq!(claimed.status, JobStatus::Running);
+
+    let pg_finding = NewFinding {
+        rule_id: "pg.audit.rule".into(),
+        severity: "High".into(),
+        confidence: "Confirmed".into(),
+        title: "Postgres Agent Test Finding".into(),
+        endpoint: "pg-endpoint".into(),
+        evidence: "evidence-1".into(),
+        recommendation: "remediate-1".into(),
+    };
+    store
+        .complete_agent_job(
+            agent.id,
+            pg_job.id,
+            org1.id,
+            Some(r#"{"success":true}"#),
+            &[pg_finding],
+        )
+        .await
+        .expect("Complete agent job in PG");
+
+    let completed_pg_job = store.get_job(org1.id, pg_job.id).await.unwrap().unwrap();
+    assert_eq!(completed_pg_job.status, JobStatus::Completed);
 }
