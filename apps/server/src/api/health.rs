@@ -43,7 +43,7 @@ pub async fn liveness_handler(State(state): State<Arc<AppState>>) -> Response {
 
 /// `GET /health/ready` handler confirming backend storage and worker readiness.
 pub async fn readiness_handler(State(state): State<Arc<AppState>>) -> Response {
-    let storage_ready = state.store.is_healthy();
+    let storage_ready = state.store.is_healthy().await;
     let status = if storage_ready { "ready" } else { "degraded" };
     let code = if storage_ready {
         StatusCode::OK

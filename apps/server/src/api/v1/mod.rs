@@ -18,6 +18,7 @@ pub fn router() -> Router<Arc<AppState>> {
         // Auth
         .route("/auth/login", post(auth::login_handler))
         .route("/auth/bootstrap", post(auth::bootstrap_handler))
+        .route("/auth/logout", post(auth::logout_handler))
         .route("/auth/me", get(auth::me_handler))
         // Organizations & Users
         .route("/organizations/current", get(orgs::get_current_org_handler))

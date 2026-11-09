@@ -34,6 +34,10 @@ pub struct ServerConfig {
     pub database_url: Option<String>,
     /// Cryptographic signing secret for authentication tokens (min 32 bytes).
     pub secret_key: String,
+    /// Fallback secrets accepted during key rotation.
+    pub fallback_secret_keys: Vec<String>,
+    /// Permitted CORS origins for API requests.
+    pub allowed_origins: Vec<String>,
     /// Global HTTP request timeout in seconds.
     pub request_timeout_secs: u64,
     /// Maximum permitted request body size in bytes (default: 2 MB).
@@ -52,6 +56,11 @@ impl Default for ServerConfig {
             data_dir: PathBuf::from("./data"),
             database_url: None,
             secret_key: "openaudit-insecure-dev-secret-do-not-use-in-prod".to_string(),
+            fallback_secret_keys: Vec::new(),
+            allowed_origins: vec![
+                "http://localhost:3000".to_string(),
+                "http://127.0.0.1:3000".to_string(),
+            ],
             request_timeout_secs: 30,
             max_body_size_bytes: 2 * 1024 * 1024, // 2MB
             max_concurrent_jobs: 8,
@@ -107,6 +116,24 @@ impl ServerConfig {
 
         if let Ok(secret) = env::var("OPENAUDIT_SECRET_KEY") {
             config.secret_key = secret;
+        }
+
+        if let Ok(fallbacks) = env::var("OPENAUDIT_FALLBACK_SECRETS") {
+            config.fallback_secret_keys = fallbacks
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect();
+        }
+
+        if let Ok(origins) = env::var("OPENAUDIT_ALLOWED_ORIGINS") {
+            config.allowed_origins = origins
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToString::to_string)
+                .collect();
         }
 
         if let Ok(timeout_str) = env::var("OPENAUDIT_REQUEST_TIMEOUT_SECS") {

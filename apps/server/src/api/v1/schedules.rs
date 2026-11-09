@@ -49,15 +49,19 @@ pub async fn create_schedule_handler(
     }
 
     let profile = payload.profile.as_deref().unwrap_or("standard");
-    match state.store.create_schedule(
-        auth.org_id,
-        payload.asset_id,
-        name,
-        cron,
-        target,
-        &payload.assessment_type,
-        profile,
-    ) {
+    match state
+        .store
+        .create_schedule(
+            auth.org_id,
+            payload.asset_id,
+            name,
+            cron,
+            target,
+            &payload.assessment_type,
+            profile,
+        )
+        .await
+    {
         Ok(schedule) => (StatusCode::CREATED, Json(schedule)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -75,7 +79,7 @@ pub async fn list_schedules_handler(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedUser,
 ) -> Response {
-    match state.store.list_schedules(auth.org_id) {
+    match state.store.list_schedules(auth.org_id).await {
         Ok(schedules) => (StatusCode::OK, Json(schedules)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,

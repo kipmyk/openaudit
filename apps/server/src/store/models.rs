@@ -204,3 +204,11 @@ pub struct AssessmentSchedule {
     pub next_run_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
+
+/// Revoked authentication token record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevokedToken {
+    pub jti: Uuid,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: DateTime<Utc>,
+}

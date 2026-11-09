@@ -44,6 +44,13 @@ pub async fn run_server(
     let bind_addr = config.bind_addr;
     let queue = JobQueue::new(config.max_concurrent_jobs);
 
+    // Recover any jobs interrupted by a previous server restart
+    if let Ok(count) = store.recover_interrupted_jobs().await {
+        if count > 0 {
+            tracing::warn!("Recovered {count} interrupted jobs from previous server execution");
+        }
+    }
+
     // Start background schedule evaluator
     let scheduler = ScheduleRunner::new(store.clone(), queue.clone());
     scheduler.start();

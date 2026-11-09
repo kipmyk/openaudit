@@ -82,6 +82,12 @@ CREATE TABLE IF NOT EXISTS assessment_schedules (
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    jti UUID PRIMARY KEY,
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Performance Indexes for Tenant Isolation & High Fleet Volume
 CREATE INDEX IF NOT EXISTS idx_users_org ON users(org_id);
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -92,4 +98,5 @@ CREATE INDEX IF NOT EXISTS idx_findings_org_job ON assessment_findings(org_id, j
 CREATE INDEX IF NOT EXISTS idx_findings_severity ON assessment_findings(org_id, severity);
 CREATE INDEX IF NOT EXISTS idx_schedules_org ON assessment_schedules(org_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_schedules_due ON assessment_schedules(is_active, next_run_at) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_revoked_tokens_exp ON revoked_tokens(expires_at);
 

@@ -48,6 +48,7 @@ pub async fn create_asset_handler(
     match state
         .store
         .create_asset(auth.org_id, name, &payload.asset_type, target, criticality)
+        .await
     {
         Ok(asset) => (StatusCode::CREATED, Json(asset)).into_response(),
         Err(err) => (
@@ -66,7 +67,7 @@ pub async fn list_assets_handler(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedUser,
 ) -> Response {
-    match state.store.list_assets(auth.org_id) {
+    match state.store.list_assets(auth.org_id).await {
         Ok(assets) => (StatusCode::OK, Json(assets)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -85,7 +86,7 @@ pub async fn get_asset_handler(
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Response {
-    match state.store.get_asset(auth.org_id, id) {
+    match state.store.get_asset(auth.org_id, id).await {
         Ok(Some(asset)) => (StatusCode::OK, Json(asset)).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -116,7 +117,7 @@ pub async fn delete_asset_handler(
         return res;
     }
 
-    match state.store.delete_asset(auth.org_id, id) {
+    match state.store.delete_asset(auth.org_id, id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => (
             StatusCode::NOT_FOUND,

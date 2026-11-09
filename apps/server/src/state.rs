@@ -12,6 +12,7 @@ pub struct AppState {
     pub config: ServerConfig,
     pub store: Arc<dyn ControlPlaneStore>,
     pub queue: JobQueue,
+    pub login_limiter: Arc<crate::auth::LoginRateLimiter>,
     started_at: Instant,
 }
 
@@ -32,6 +33,7 @@ impl AppState {
             config,
             store,
             queue,
+            login_limiter: Arc::new(crate::auth::LoginRateLimiter::default()),
             started_at: Instant::now(),
         }
     }

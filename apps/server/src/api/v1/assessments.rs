@@ -49,13 +49,17 @@ pub async fn create_job_handler(
     }
 
     let profile = payload.profile.as_deref().unwrap_or("standard");
-    let job = match state.store.create_job(
-        auth.org_id,
-        payload.asset_id,
-        target,
-        &payload.assessment_type,
-        profile,
-    ) {
+    let job = match state
+        .store
+        .create_job(
+            auth.org_id,
+            payload.asset_id,
+            target,
+            &payload.assessment_type,
+            profile,
+        )
+        .await
+    {
         Ok(j) => j,
         Err(err) => {
             return (
@@ -80,7 +84,7 @@ pub async fn list_jobs_handler(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedUser,
 ) -> Response {
-    match state.store.list_jobs(auth.org_id, 100) {
+    match state.store.list_jobs(auth.org_id, 100).await {
         Ok(jobs) => (StatusCode::OK, Json(jobs)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -99,7 +103,7 @@ pub async fn get_job_handler(
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Response {
-    match state.store.get_job(auth.org_id, id) {
+    match state.store.get_job(auth.org_id, id).await {
         Ok(Some(job)) => (StatusCode::OK, Json(job)).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -130,7 +134,7 @@ pub async fn cancel_job_handler(
         return res;
     }
 
-    match state.store.get_job(auth.org_id, id) {
+    match state.store.get_job(auth.org_id, id).await {
         Ok(Some(job)) => {
             if job.status.is_terminal() {
                 return (
@@ -144,13 +148,16 @@ pub async fn cancel_job_handler(
             }
 
             state.queue.cancel_job(id);
-            let _ = state.store.update_job_status(
-                auth.org_id,
-                id,
-                crate::store::models::JobStatus::Cancelled,
-                None,
-                Some("Cancelled by operator request"),
-            );
+            let _ = state
+                .store
+                .update_job_status(
+                    auth.org_id,
+                    id,
+                    crate::store::models::JobStatus::Cancelled,
+                    None,
+                    Some("Cancelled by operator request"),
+                )
+                .await;
 
             (
                 StatusCode::OK,
@@ -186,7 +193,7 @@ pub async fn get_job_findings_handler(
     auth: AuthenticatedUser,
     Path(id): Path<Uuid>,
 ) -> Response {
-    match state.store.list_findings(auth.org_id, Some(id), None) {
+    match state.store.list_findings(auth.org_id, Some(id), None).await {
         Ok(findings) => (StatusCode::OK, Json(findings)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -208,6 +215,7 @@ pub async fn list_all_findings_handler(
     match state
         .store
         .list_findings(auth.org_id, None, query.min_severity.as_deref())
+        .await
     {
         Ok(findings) => (StatusCode::OK, Json(findings)).into_response(),
         Err(err) => (

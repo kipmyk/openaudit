@@ -25,7 +25,7 @@ pub async fn get_current_org_handler(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedUser,
 ) -> Response {
-    match state.store.get_organization(auth.org_id) {
+    match state.store.get_organization(auth.org_id).await {
         Ok(Some(org)) => (StatusCode::OK, Json(org)).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
@@ -51,7 +51,7 @@ pub async fn list_org_users_handler(
     State(state): State<Arc<AppState>>,
     auth: AuthenticatedUser,
 ) -> Response {
-    match state.store.list_users(auth.org_id) {
+    match state.store.list_users(auth.org_id).await {
         Ok(users) => (StatusCode::OK, Json(users)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -105,6 +105,7 @@ pub async fn create_org_user_handler(
     match state
         .store
         .create_user(auth.org_id, &payload.email, &p_hash, &payload.name, role)
+        .await
     {
         Ok(user) => (StatusCode::CREATED, Json(user)).into_response(),
         Err(err) => (

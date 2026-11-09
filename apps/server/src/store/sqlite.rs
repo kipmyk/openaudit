@@ -161,6 +161,13 @@ impl SqliteControlPlaneStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_org_status ON assessment_jobs(org_id, status);
             CREATE INDEX IF NOT EXISTS idx_findings_org_job ON assessment_findings(org_id, job_id);
             CREATE INDEX IF NOT EXISTS idx_schedules_org ON assessment_schedules(org_id, is_active);
+
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                jti TEXT PRIMARY KEY,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_revoked_tokens_exp ON revoked_tokens(expires_at);
             ",
         )
         .map_err(|e| StoreError::Database(format!("schema migration failed: {e}")))?;
@@ -169,15 +176,118 @@ impl SqliteControlPlaneStore {
     }
 }
 
+#[async_trait::async_trait]
 impl ControlPlaneStore for SqliteControlPlaneStore {
-    fn is_healthy(&self) -> bool {
+    async fn is_healthy(&self) -> bool {
         self.conn
             .lock()
             .map(|c| c.query_row("SELECT 1", [], |_| Ok(())).is_ok())
             .unwrap_or(false)
     }
 
-    fn create_organization(&self, name: &str, slug: &str) -> Result<Organization, StoreError> {
+    async fn bootstrap_admin(
+        &self,
+        org_name: &str,
+        org_slug: &str,
+        admin_name: &str,
+        admin_email: &str,
+        password_hash: &str,
+    ) -> Result<(Organization, User), StoreError> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // Atomic check: ensure no users exist anywhere in the system
+        let user_count: i64 = tx
+            .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        if user_count > 0 {
+            return Err(StoreError::Conflict(
+                "Control plane already bootstrapped with existing users".into(),
+            ));
+        }
+
+        let org_exists: bool = tx
+            .query_row(
+                "SELECT 1 FROM organizations WHERE slug = ?1",
+                params![org_slug],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .is_some();
+
+        if org_exists {
+            return Err(StoreError::Conflict(format!(
+                "Organization slug '{org_slug}' already exists"
+            )));
+        }
+
+        let org_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let now = Utc::now();
+        let now_str = now.to_rfc3339();
+
+        tx.execute(
+            "INSERT INTO organizations (id, slug, name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![org_id.to_string(), org_slug, org_name, now_str, now_str],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        tx.execute(
+            "INSERT INTO users (id, org_id, email, password_hash, name, role, is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                user_id.to_string(),
+                org_id.to_string(),
+                admin_email,
+                password_hash,
+                admin_name,
+                Role::Admin.as_str(),
+                1,
+                now_str,
+                now_str,
+            ],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        tx.commit()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        Ok((
+            Organization {
+                id: org_id,
+                slug: org_slug.to_string(),
+                name: org_name.to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+            User {
+                id: user_id,
+                org_id,
+                email: admin_email.to_string(),
+                password_hash: password_hash.to_string(),
+                name: admin_name.to_string(),
+                role: Role::Admin,
+                is_active: true,
+                created_at: now,
+                updated_at: now,
+            },
+        ))
+    }
+
+    async fn create_organization(
+        &self,
+        name: &str,
+        slug: &str,
+    ) -> Result<Organization, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -207,7 +317,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         })
     }
 
-    fn get_organization(&self, id: Uuid) -> Result<Option<Organization>, StoreError> {
+    async fn get_organization(&self, id: Uuid) -> Result<Option<Organization>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -246,7 +356,10 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         }
     }
 
-    fn get_organization_by_slug(&self, slug: &str) -> Result<Option<Organization>, StoreError> {
+    async fn get_organization_by_slug(
+        &self,
+        slug: &str,
+    ) -> Result<Option<Organization>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -285,7 +398,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         }
     }
 
-    fn create_user(
+    async fn create_user(
         &self,
         org_id: Uuid,
         email: &str,
@@ -336,7 +449,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         })
     }
 
-    fn get_user_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
+    async fn get_user_by_email(&self, email: &str) -> Result<Option<User>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -390,7 +503,11 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         }
     }
 
-    fn get_user_by_id(&self, org_id: Uuid, user_id: Uuid) -> Result<Option<User>, StoreError> {
+    async fn get_user_by_id(
+        &self,
+        org_id: Uuid,
+        user_id: Uuid,
+    ) -> Result<Option<User>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -444,7 +561,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         }
     }
 
-    fn list_users(&self, org_id: Uuid) -> Result<Vec<User>, StoreError> {
+    async fn list_users(&self, org_id: Uuid) -> Result<Vec<User>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -497,7 +614,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(users)
     }
 
-    fn create_asset(
+    async fn create_asset(
         &self,
         org_id: Uuid,
         name: &str,
@@ -541,7 +658,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         })
     }
 
-    fn get_asset(&self, org_id: Uuid, id: Uuid) -> Result<Option<Asset>, StoreError> {
+    async fn get_asset(&self, org_id: Uuid, id: Uuid) -> Result<Option<Asset>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -589,7 +706,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         }
     }
 
-    fn list_assets(&self, org_id: Uuid) -> Result<Vec<Asset>, StoreError> {
+    async fn list_assets(&self, org_id: Uuid) -> Result<Vec<Asset>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -639,7 +756,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(assets)
     }
 
-    fn delete_asset(&self, org_id: Uuid, id: Uuid) -> Result<bool, StoreError> {
+    async fn delete_asset(&self, org_id: Uuid, id: Uuid) -> Result<bool, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -653,7 +770,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(count > 0)
     }
 
-    fn create_job(
+    async fn create_job(
         &self,
         org_id: Uuid,
         asset_id: Option<Uuid>,
@@ -702,7 +819,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         })
     }
 
-    fn get_job(&self, org_id: Uuid, id: Uuid) -> Result<Option<AssessmentJob>, StoreError> {
+    async fn get_job(&self, org_id: Uuid, id: Uuid) -> Result<Option<AssessmentJob>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -789,7 +906,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         }
     }
 
-    fn update_job_status(
+    async fn update_job_status(
         &self,
         org_id: Uuid,
         id: Uuid,
@@ -801,6 +918,27 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             .conn
             .lock()
             .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        // Validate state transitions
+        let current_status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM assessment_jobs WHERE org_id = ?1 AND id = ?2",
+                params![org_id.to_string(), id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+
+        let current_str =
+            current_status.ok_or_else(|| StoreError::NotFound(format!("Job '{id}' not found")))?;
+        let current = JobStatus::parse(&current_str).map_err(StoreError::Database)?;
+
+        if current.is_terminal() {
+            return Err(StoreError::Conflict(format!(
+                "Cannot transition job '{id}' from terminal status '{current:?}' to '{status:?}'"
+            )));
+        }
+
         let now_str = Utc::now().to_rfc3339();
 
         let sql = match status {
@@ -815,16 +953,15 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
             }
         };
 
-        match status {
-            JobStatus::Running => {
-                conn.execute(
+        let count = match status {
+            JobStatus::Running => conn
+                .execute(
                     sql,
                     params![status.as_str(), now_str, org_id.to_string(), id.to_string()],
                 )
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled => {
-                conn.execute(
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+            JobStatus::Completed | JobStatus::Failed | JobStatus::Cancelled => conn
+                .execute(
                     sql,
                     params![
                         status.as_str(),
@@ -835,21 +972,27 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
                         id.to_string()
                     ],
                 )
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            JobStatus::Pending => {
-                conn.execute(
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+            JobStatus::Pending => conn
+                .execute(
                     sql,
                     params![status.as_str(), org_id.to_string(), id.to_string()],
                 )
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
+                .map_err(|e| StoreError::Database(e.to_string()))?,
+        };
+
+        if count == 0 {
+            return Err(StoreError::NotFound(format!("Job '{id}' not found")));
         }
 
         Ok(())
     }
 
-    fn list_jobs(&self, org_id: Uuid, limit: usize) -> Result<Vec<AssessmentJob>, StoreError> {
+    async fn list_jobs(
+        &self,
+        org_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<AssessmentJob>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -934,7 +1077,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(jobs)
     }
 
-    fn create_findings(
+    async fn create_findings(
         &self,
         org_id: Uuid,
         job_id: Uuid,
@@ -977,7 +1120,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(())
     }
 
-    fn list_findings(
+    async fn list_findings(
         &self,
         org_id: Uuid,
         job_id: Option<Uuid>,
@@ -1108,7 +1251,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(findings)
     }
 
-    fn create_schedule(
+    async fn create_schedule(
         &self,
         org_id: Uuid,
         asset_id: Option<Uuid>,
@@ -1160,7 +1303,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         })
     }
 
-    fn list_schedules(&self, org_id: Uuid) -> Result<Vec<AssessmentSchedule>, StoreError> {
+    async fn list_schedules(&self, org_id: Uuid) -> Result<Vec<AssessmentSchedule>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -1243,7 +1386,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(schedules)
     }
 
-    fn get_due_schedules(&self) -> Result<Vec<AssessmentSchedule>, StoreError> {
+    async fn get_due_schedules(&self) -> Result<Vec<AssessmentSchedule>, StoreError> {
         let conn = self
             .conn
             .lock()
@@ -1328,7 +1471,7 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         Ok(schedules)
     }
 
-    fn update_schedule_run_state(
+    async fn update_schedule_run_state(
         &self,
         schedule_id: Uuid,
         last_run: DateTime<Utc>,
@@ -1349,39 +1492,105 @@ impl ControlPlaneStore for SqliteControlPlaneStore {
         .map_err(|e| StoreError::Database(e.to_string()))?;
         Ok(())
     }
+
+    async fn revoke_token(&self, jti: Uuid, expires_at: DateTime<Utc>) -> Result<(), StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let now_str = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT OR IGNORE INTO revoked_tokens (jti, expires_at, revoked_at) VALUES (?1, ?2, ?3)",
+            params![jti.to_string(), expires_at.to_rfc3339(), now_str],
+        )
+        .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn is_token_revoked(&self, jti: Uuid) -> Result<bool, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM revoked_tokens WHERE jti = ?1",
+                params![jti.to_string()],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| StoreError::Database(e.to_string()))?
+            .is_some();
+        Ok(exists)
+    }
+
+    async fn clean_expired_revocations(&self) -> Result<usize, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let now_str = Utc::now().to_rfc3339();
+        let count = conn
+            .execute(
+                "DELETE FROM revoked_tokens WHERE expires_at < ?1",
+                params![now_str],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(count)
+    }
+
+    async fn recover_interrupted_jobs(&self) -> Result<usize, StoreError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        let now_str = Utc::now().to_rfc3339();
+        let count = conn
+            .execute(
+                "UPDATE assessment_jobs SET status = 'failed', error_message = 'Job execution interrupted by server restart/shutdown', completed_at = ?1 WHERE status = 'running'",
+                params![now_str],
+            )
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_sqlite_tenant_isolation_and_lifecycle() {
+    #[tokio::test]
+    async fn test_sqlite_tenant_isolation_and_lifecycle() {
         let store = SqliteControlPlaneStore::in_memory().expect("Must initialize in-memory SQLite");
-        assert!(store.is_healthy());
+        assert!(store.is_healthy().await);
 
         // Create Org 1 and Org 2
         let org1 = store
             .create_organization("Acme Corp", "acme")
+            .await
             .expect("Must create org1");
         let org2 = store
             .create_organization("Beta Ltd", "beta")
+            .await
             .expect("Must create org2");
 
         // Create assets in Org 1
         let asset1 = store
             .create_asset(org1.id, "Web Server", "linux_host", "192.168.1.10", "high")
+            .await
             .expect("Must create asset in org1");
 
         // Verify Org 2 cannot read Org 1's asset (strict tenant isolation)
         let isolated = store
             .get_asset(org2.id, asset1.id)
+            .await
             .expect("Query must succeed");
         assert_eq!(isolated, None, "Org 2 must not see Org 1 asset");
 
         // Org 1 can read its own asset
         let read_back = store
             .get_asset(org1.id, asset1.id)
+            .await
             .expect("Query must succeed")
             .expect("Asset must exist");
         assert_eq!(read_back.name, "Web Server");
@@ -1395,17 +1604,20 @@ mod tests {
                 "Alice Admin",
                 Role::Admin,
             )
+            .await
             .expect("Must create user");
         assert_eq!(user1.role, Role::Admin);
 
         // Conflict when creating same user in same org
-        let conflict = store.create_user(
-            org1.id,
-            "alice@acme.com",
-            "argon2id$mockhash",
-            "Alice Duplicate",
-            Role::Viewer,
-        );
+        let conflict = store
+            .create_user(
+                org1.id,
+                "alice@acme.com",
+                "argon2id$mockhash",
+                "Alice Duplicate",
+                Role::Viewer,
+            )
+            .await;
         assert!(matches!(conflict, Err(StoreError::Conflict(_))));
 
         // Create Job in Org 1
@@ -1417,12 +1629,14 @@ mod tests {
                 "local_host",
                 "baseline",
             )
+            .await
             .expect("Must create job");
         assert_eq!(job.status, JobStatus::Pending);
 
         // Update Job to Running, then Completed
         store
             .update_job_status(org1.id, job.id, JobStatus::Running, None, None)
+            .await
             .expect("Update must succeed");
         store
             .update_job_status(
@@ -1432,15 +1646,23 @@ mod tests {
                 Some(r#"{"findings_count": 1}"#),
                 None,
             )
+            .await
             .expect("Update must succeed");
 
         let updated_job = store
             .get_job(org1.id, job.id)
+            .await
             .expect("Job must exist")
             .unwrap();
         assert_eq!(updated_job.status, JobStatus::Completed);
         assert!(updated_job.started_at.is_some());
         assert!(updated_job.completed_at.is_some());
+
+        // Enforce valid state transition: completed terminal job cannot be transitioned again
+        let conflict_transition = store
+            .update_job_status(org1.id, job.id, JobStatus::Running, None, None)
+            .await;
+        assert!(matches!(conflict_transition, Err(StoreError::Conflict(_))));
 
         // Create Finding for Job
         let finding = NewFinding {
@@ -1454,10 +1676,12 @@ mod tests {
         };
         store
             .create_findings(org1.id, job.id, &[finding])
+            .await
             .expect("Must persist finding");
 
         let findings = store
             .list_findings(org1.id, Some(job.id), None)
+            .await
             .expect("List findings must succeed");
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "linux.ssh.root-login");
@@ -1465,7 +1689,46 @@ mod tests {
         // Org 2 cannot see Org 1 findings
         let isolated_findings = store
             .list_findings(org2.id, Some(job.id), None)
+            .await
             .expect("List findings query must succeed");
         assert!(isolated_findings.is_empty());
+
+        // Test Token Revocation
+        let jti = Uuid::new_v4();
+        let exp = Utc::now() + chrono::Duration::hours(1);
+        assert!(!store.is_token_revoked(jti).await.unwrap());
+        store
+            .revoke_token(jti, exp)
+            .await
+            .expect("Must revoke token");
+        assert!(store.is_token_revoked(jti).await.unwrap());
+
+        // Test Interrupted Job Recovery
+        let interrupted_job = store
+            .create_job(org1.id, None, "127.0.0.1", "local_host", "default")
+            .await
+            .expect("Must create job");
+        store
+            .update_job_status(org1.id, interrupted_job.id, JobStatus::Running, None, None)
+            .await
+            .expect("Must set to running");
+
+        let recovered = store
+            .recover_interrupted_jobs()
+            .await
+            .expect("Must recover");
+        assert!(recovered >= 1);
+
+        let recovered_job = store
+            .get_job(org1.id, interrupted_job.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered_job.status, JobStatus::Failed);
+        assert!(recovered_job
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains("interrupted by server restart"));
     }
 }

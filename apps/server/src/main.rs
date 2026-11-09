@@ -865,6 +865,12 @@ fn run_serve(args: &[String]) -> Result<(), String> {
                     config.data_dir = PathBuf::from(&args[i]);
                 }
             }
+            "--database-url" => {
+                i += 1;
+                if i < args.len() {
+                    config.database_url = Some(args[i].clone());
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -875,16 +881,35 @@ fn run_serve(args: &[String]) -> Result<(), String> {
     fs::create_dir_all(&config.data_dir)
         .map_err(|e| format!("Failed to create data directory: {e}"))?;
 
-    let store_path = config.data_dir.join("control_plane.db");
-    let store = Arc::new(
-        openaudit_server::store::sqlite::SqliteControlPlaneStore::open(&store_path)
-            .map_err(|e| format!("Failed to open control plane store: {e}"))?,
-    );
-
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("Failed to start tokio runtime: {e}"))?;
+
+    let store: Arc<dyn openaudit_server::store::ControlPlaneStore> =
+        if let Some(ref db_url) = config.database_url {
+            if db_url.starts_with("postgres://") || db_url.starts_with("postgresql://") {
+                tracing::info!("Initializing PostgreSQL control plane store...");
+                let pg_store = rt.block_on(async {
+                    openaudit_server::store::postgres::PostgresControlPlaneStore::connect(db_url)
+                        .await
+                        .map_err(|e| format!("Failed to connect to PostgreSQL: {e}"))
+                })?;
+                Arc::new(pg_store)
+            } else {
+                let store_path = config.data_dir.join("control_plane.db");
+                Arc::new(
+                    openaudit_server::store::sqlite::SqliteControlPlaneStore::open(&store_path)
+                        .map_err(|e| format!("Failed to open control plane store: {e}"))?,
+                )
+            }
+        } else {
+            let store_path = config.data_dir.join("control_plane.db");
+            Arc::new(
+                openaudit_server::store::sqlite::SqliteControlPlaneStore::open(&store_path)
+                    .map_err(|e| format!("Failed to open control plane store: {e}"))?,
+            )
+        };
 
     rt.block_on(async {
         openaudit_server::run_server(config, store)

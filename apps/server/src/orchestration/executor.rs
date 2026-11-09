@@ -77,6 +77,7 @@ pub async fn execute_assessment(
             if !new_findings.is_empty() {
                 store
                     .create_findings(job.org_id, job.id, &new_findings)
+                    .await
                     .map_err(|e| format!("Failed to store findings: {e}"))?;
             }
 
@@ -147,6 +148,7 @@ pub async fn execute_assessment(
             if !new_findings.is_empty() {
                 store
                     .create_findings(job.org_id, job.id, &new_findings)
+                    .await
                     .map_err(|e| format!("Failed to store findings: {e}"))?;
             }
 

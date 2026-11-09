@@ -37,7 +37,44 @@ pub async fn openapi_json_handler() -> Response {
                     },
                     "responses": {
                         "200": { "description": "Authenticated session token issued" },
-                        "401": { "description": "Invalid credentials" }
+                        "401": { "description": "Invalid credentials" },
+                        "429": { "description": "Rate limit exceeded" }
+                    }
+                }
+            },
+            "/auth/logout": {
+                "post": {
+                    "summary": "Revoke current authentication token",
+                    "security": [{ "BearerAuth": [] }],
+                    "responses": {
+                        "200": { "description": "Session token successfully revoked" },
+                        "401": { "description": "Unauthorized" }
+                    }
+                }
+            },
+            "/auth/bootstrap": {
+                "post": {
+                    "summary": "Atomic one-time initial administrator and tenant bootstrap",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["org_name", "org_slug", "email", "password", "name"],
+                                    "properties": {
+                                        "org_name": { "type": "string" },
+                                        "org_slug": { "type": "string" },
+                                        "email": { "type": "string", "format": "email" },
+                                        "password": { "type": "string" },
+                                        "name": { "type": "string" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "201": { "description": "Initial administrator registered" },
+                        "409": { "description": "Already bootstrapped or organization slug exists" }
                     }
                 }
             },

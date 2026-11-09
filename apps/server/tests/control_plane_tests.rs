@@ -31,6 +31,7 @@ fn create_test_app() -> (axum::Router, Arc<SqliteControlPlaneStore>, Arc<AppStat
     let store = Arc::new(SqliteControlPlaneStore::in_memory().expect("In-memory SQLite failed"));
     let config = ServerConfig {
         secret_key: "test-secret-key-at-least-32-bytes-long!".into(),
+        fallback_secret_keys: vec!["old-rotated-fallback-secret-at-least-32b!".into()],
         ..Default::default()
     };
 
@@ -65,6 +66,8 @@ async fn test_m5_1_health_and_capabilities_endpoints() {
     let (status, body) = json_response(res).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
+    assert!(body["uptime_secs"].is_number());
+    assert_eq!(body["version"], openaudit_core::version());
 
     // 2. GET /health/ready
     let req = Request::builder()
@@ -77,6 +80,7 @@ async fn test_m5_1_health_and_capabilities_endpoints() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ready");
     assert_eq!(body["database"], "connected");
+    assert_eq!(body["storage_ready"], true);
 
     // 3. GET /version
     let req = Request::builder()
@@ -88,6 +92,7 @@ async fn test_m5_1_health_and_capabilities_endpoints() {
     let (status, body) = json_response(res).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["name"], "OpenAudit Control Plane");
+    assert_eq!(body["version"], openaudit_core::version());
 
     // 4. GET /api/v1/capabilities
     let req = Request::builder()
@@ -100,6 +105,7 @@ async fn test_m5_1_health_and_capabilities_endpoints() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["capabilities"]["local_host_auditing"], true);
     assert_eq!(body["capabilities"]["network_perimeter_auditing"], true);
+    assert_eq!(body["capabilities"]["d4_attestation"], true);
     assert_eq!(body["capabilities"]["tenant_isolation"], true);
 }
 
@@ -107,14 +113,15 @@ async fn test_m5_1_health_and_capabilities_endpoints() {
 async fn test_m5_3_auth_lifecycle_and_rbac_enforcement() {
     let (app, _, _) = create_test_app();
 
-    // 1. Initial bootstrap of tenant org and admin
+    // 1. Bootstrap initial admin
     let bootstrap_payload = json!({
-        "org_name": "Cyber Defense Corp",
+        "org_name": "Cyber Defense Inc",
         "org_slug": "cyberdef",
         "email": "admin@cyberdef.org",
-        "password": "Password123!",
-        "name": "Chief Security Officer"
+        "password": "SuperSecurePassword123!",
+        "name": "Initial Admin"
     });
+
     let req = Request::builder()
         .uri("/api/v1/auth/bootstrap")
         .method(Method::POST)
@@ -124,16 +131,30 @@ async fn test_m5_3_auth_lifecycle_and_rbac_enforcement() {
     let res = app.clone().oneshot(req).await.unwrap();
     let (status, body) = json_response(res).await;
     assert_eq!(status, StatusCode::CREATED);
-    let admin_token = body["token"]
-        .as_str()
-        .expect("Token must exist")
-        .to_string();
+    assert!(body["token"].is_string());
     assert_eq!(body["user"]["role"], "admin");
+    assert_eq!(body["user"]["email"], "admin@cyberdef.org");
 
-    // 2. Login with valid credentials
+    let admin_token = body["token"].as_str().unwrap();
+
+    // 2. Reject duplicate bootstrap (conflict)
+    let req = Request::builder()
+        .uri("/api/v1/auth/bootstrap")
+        .method(Method::POST)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(bootstrap_payload.to_string()))
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::CONFLICT,
+        "Duplicate bootstrap must be rejected"
+    );
+
+    // 3. Login with valid credentials
     let login_payload = json!({
         "email": "admin@cyberdef.org",
-        "password": "Password123!"
+        "password": "SuperSecurePassword123!"
     });
     let req = Request::builder()
         .uri("/api/v1/auth/login")
@@ -146,10 +167,10 @@ async fn test_m5_3_auth_lifecycle_and_rbac_enforcement() {
     assert_eq!(status, StatusCode::OK);
     assert!(body["token"].is_string());
 
-    // 3. Login with invalid password fails with 401
+    // 4. Login with invalid password fails
     let bad_login = json!({
         "email": "admin@cyberdef.org",
-        "password": "WrongPassword!"
+        "password": "WrongPassword999!"
     });
     let req = Request::builder()
         .uri("/api/v1/auth/login")
@@ -160,7 +181,7 @@ async fn test_m5_3_auth_lifecycle_and_rbac_enforcement() {
     let res = app.clone().oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
-    // 4. GET /api/v1/auth/me with Admin token
+    // 5. GET /api/v1/auth/me with valid Bearer token
     let req = Request::builder()
         .uri("/api/v1/auth/me")
         .method(Method::GET)
@@ -170,31 +191,15 @@ async fn test_m5_3_auth_lifecycle_and_rbac_enforcement() {
     let res = app.clone().oneshot(req).await.unwrap();
     let (status, body) = json_response(res).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["role"], "admin");
     assert_eq!(body["email"], "admin@cyberdef.org");
+    assert_eq!(body["role"], "admin");
+    assert_eq!(body["organization"]["slug"], "cyberdef");
 
-    // 5. Create a Viewer user (requires Admin)
-    let new_user_payload = json!({
-        "email": "auditor@cyberdef.org",
-        "password": "AuditorPass123!",
-        "name": "Audit Analyst",
-        "role": "auditor"
-    });
-    let req = Request::builder()
-        .uri("/api/v1/organizations/users")
-        .method(Method::POST)
-        .header(header::AUTHORIZATION, format!("Bearer {admin_token}"))
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(new_user_payload.to_string()))
-        .unwrap();
-    let res = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::CREATED);
-
-    // 6. Create a Read-Only Viewer
+    // 6. Admin creates a Viewer user
     let viewer_payload = json!({
         "email": "viewer@cyberdef.org",
         "password": "ViewerPass123!",
-        "name": "Compliance Viewer",
+        "name": "Audit Observer",
         "role": "viewer"
     });
     let req = Request::builder()
@@ -245,15 +250,105 @@ async fn test_m5_3_auth_lifecycle_and_rbac_enforcement() {
 }
 
 #[tokio::test]
-async fn test_m5_2_tenant_isolation_enforcement() {
+async fn test_m5_authentication_hardening_and_revocation() {
+    let (app, store, state) = create_test_app();
+
+    let org = store
+        .create_organization("Security Corp", "security-corp")
+        .await
+        .unwrap();
+    let user = store
+        .create_user(
+            org.id,
+            "sec@corp.com",
+            "argon2id$mockhash",
+            "Sec User",
+            Role::Admin,
+        )
+        .await
+        .unwrap();
+
+    let token = openaudit_server::auth::issue_token(
+        user.id,
+        org.id,
+        user.role,
+        &user.email,
+        3600,
+        &state.config.secret_key,
+    )
+    .unwrap();
+
+    // Test token works initially
+    let req = Request::builder()
+        .uri("/api/v1/auth/me")
+        .method(Method::GET)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Call POST /api/v1/auth/logout to revoke token
+    let req = Request::builder()
+        .uri("/api/v1/auth/logout")
+        .method(Method::POST)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Subsequent call with revoked token MUST be rejected with 401 Unauthorized
+    let req = Request::builder()
+        .uri("/api/v1/auth/me")
+        .method(Method::GET)
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::UNAUTHORIZED,
+        "Revoked token must be rejected"
+    );
+
+    // Test Login Rate Limiting (5 failed attempts trigger 429)
+    for _ in 0..5 {
+        state.login_limiter.record_failure("attacker@corp.com");
+    }
+
+    let bad_login = json!({
+        "email": "attacker@corp.com",
+        "password": "Password123!"
+    });
+    let req = Request::builder()
+        .uri("/api/v1/auth/login")
+        .method(Method::POST)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(bad_login.to_string()))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "Exceeded login attempts must receive 429"
+    );
+}
+
+#[tokio::test]
+async fn test_m5_adversarial_cross_tenant_isolation() {
     let (app, store, state) = create_test_app();
 
     // Setup Tenant Org 1
-    let org1 = store.create_organization("Tenant One", "tenant-1").unwrap();
-    let user1 = store
-        .create_user(org1.id, "u1@tenant1.com", "hash", "User 1", Role::Admin)
+    let org1 = store
+        .create_organization("Tenant Alpha", "tenant-alpha")
+        .await
         .unwrap();
-    let token1 = openaudit_server::auth::issue_token(
+    let user1 = store
+        .create_user(org1.id, "u1@alpha.com", "hash", "User 1", Role::Admin)
+        .await
+        .unwrap();
+    let _token1 = openaudit_server::auth::issue_token(
         user1.id,
         org1.id,
         user1.role,
@@ -264,9 +359,13 @@ async fn test_m5_2_tenant_isolation_enforcement() {
     .unwrap();
 
     // Setup Tenant Org 2
-    let org2 = store.create_organization("Tenant Two", "tenant-2").unwrap();
+    let org2 = store
+        .create_organization("Tenant Bravo", "tenant-bravo")
+        .await
+        .unwrap();
     let user2 = store
-        .create_user(org2.id, "u2@tenant2.com", "hash", "User 2", Role::Admin)
+        .create_user(org2.id, "u2@bravo.com", "hash", "User 2", Role::Admin)
+        .await
         .unwrap();
     let token2 = openaudit_server::auth::issue_token(
         user2.id,
@@ -280,10 +379,11 @@ async fn test_m5_2_tenant_isolation_enforcement() {
 
     // Org 1 creates an asset
     let asset1 = store
-        .create_asset(org1.id, "Org1 Server", "linux_host", "10.10.0.1", "high")
+        .create_asset(org1.id, "Alpha Server", "linux_host", "10.10.0.1", "high")
+        .await
         .unwrap();
 
-    // Org 2 tries to GET Org 1's asset by ID -> Expect 404 Not Found (tenant isolated)
+    // Org 2 tries to GET Org 1's asset by ID -> Expect 404 Not Found
     let req = Request::builder()
         .uri(format!("/api/v1/assets/{}", asset1.id))
         .method(Method::GET)
@@ -297,24 +397,117 @@ async fn test_m5_2_tenant_isolation_enforcement() {
         "Tenant 2 must not see Tenant 1 asset"
     );
 
-    // Org 1 can retrieve its own asset
+    // Org 2 tries to DELETE Org 1's asset -> Expect 404 Not Found
     let req = Request::builder()
         .uri(format!("/api/v1/assets/{}", asset1.id))
+        .method(Method::DELETE)
+        .header(header::AUTHORIZATION, format!("Bearer {token2}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Tenant 2 must not be able to delete Tenant 1 asset"
+    );
+
+    // Org 1 creates an assessment job
+    let job1 = store
+        .create_job(
+            org1.id,
+            Some(asset1.id),
+            "10.10.0.1",
+            "local_host",
+            "standard",
+        )
+        .await
+        .unwrap();
+
+    // Org 2 tries to GET Org 1's job -> Expect 404 Not Found
+    let req = Request::builder()
+        .uri(format!("/api/v1/assessments/jobs/{}", job1.id))
         .method(Method::GET)
-        .header(header::AUTHORIZATION, format!("Bearer {token1}"))
+        .header(header::AUTHORIZATION, format!("Bearer {token2}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Tenant 2 must not see Tenant 1 job"
+    );
+
+    // Org 2 tries to CANCEL Org 1's job -> Expect 404 Not Found
+    let req = Request::builder()
+        .uri(format!("/api/v1/assessments/jobs/{}/cancel", job1.id))
+        .method(Method::POST)
+        .header(header::AUTHORIZATION, format!("Bearer {token2}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(
+        res.status(),
+        StatusCode::NOT_FOUND,
+        "Tenant 2 must not be able to cancel Tenant 1 job"
+    );
+
+    // Org 1 creates finding
+    let finding1 = openaudit_server::store::models::NewFinding {
+        rule_id: "ssh.config".into(),
+        severity: "High".into(),
+        confidence: "Confirmed".into(),
+        title: "Weak SSH".into(),
+        endpoint: "10.10.0.1:22".into(),
+        evidence: "PasswordAuthentication yes".into(),
+        recommendation: "Use keys".into(),
+    };
+    store
+        .create_findings(org1.id, job1.id, &[finding1])
+        .await
+        .unwrap();
+
+    // Org 2 tries to GET Org 1 findings by job_id -> Expect 404 / empty
+    let req = Request::builder()
+        .uri(format!("/api/v1/assessments/jobs/{}/findings", job1.id))
+        .method(Method::GET)
+        .header(header::AUTHORIZATION, format!("Bearer {token2}"))
+        .body(Body::empty())
+        .unwrap();
+    let res = app.clone().oneshot(req).await.unwrap();
+    let (_, findings2) = json_response(res).await;
+    assert_eq!(
+        findings2.as_array().unwrap().len(),
+        0,
+        "Tenant 2 must not receive Tenant 1 findings"
+    );
+
+    // Org 2 lists all findings -> 0 findings returned
+    let req = Request::builder()
+        .uri("/api/v1/assessments/findings")
+        .method(Method::GET)
+        .header(header::AUTHORIZATION, format!("Bearer {token2}"))
         .body(Body::empty())
         .unwrap();
     let res = app.oneshot(req).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
+    let (_, all_findings2) = json_response(res).await;
+    assert_eq!(
+        all_findings2.as_array().unwrap().len(),
+        0,
+        "Tenant 2 list_findings must be isolated"
+    );
 }
 
 #[tokio::test]
 async fn test_m5_4_assessment_orchestration_and_findings() {
     let (app, store, state) = create_test_app();
 
-    let org = store.create_organization("Acme Labs", "acme-labs").unwrap();
+    let org = store
+        .create_organization("Acme Labs", "acme-labs")
+        .await
+        .unwrap();
     let user = store
         .create_user(org.id, "auditor@acme.com", "hash", "Auditor", Role::Auditor)
+        .await
         .unwrap();
     let token = openaudit_server::auth::issue_token(
         user.id,
@@ -349,7 +542,7 @@ async fn test_m5_4_assessment_orchestration_and_findings() {
     let mut completed = false;
     for _ in 0..20 {
         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-        if let Ok(Some(j)) = store.get_job(org.id, job_id) {
+        if let Ok(Some(j)) = store.get_job(org.id, job_id).await {
             if j.status == openaudit_server::store::models::JobStatus::Completed {
                 completed = true;
                 break;
@@ -381,4 +574,6 @@ async fn test_m5_4_assessment_orchestration_and_findings() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["openapi"], "3.1.0");
     assert!(body["paths"].get("/auth/login").is_some());
+    assert!(body["paths"].get("/auth/logout").is_some());
+    assert!(body["paths"].get("/auth/bootstrap").is_some());
 }

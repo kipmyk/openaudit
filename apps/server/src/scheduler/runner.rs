@@ -31,14 +31,14 @@ impl ScheduleRunner {
             let mut ticker = interval(TokioDuration::from_secs(30));
             loop {
                 ticker.tick().await;
-                self.evaluate_due_schedules();
+                self.evaluate_due_schedules().await;
             }
         });
     }
 
     /// Evaluates currently due schedules and enqueues their jobs.
-    pub fn evaluate_due_schedules(&self) {
-        let due = match self.store.get_due_schedules() {
+    pub async fn evaluate_due_schedules(&self) {
+        let due = match self.store.get_due_schedules().await {
             Ok(s) => s,
             Err(err) => {
                 tracing::warn!("Failed to query due schedules: {err}");
@@ -56,13 +56,17 @@ impl ScheduleRunner {
             );
 
             // Create and submit job
-            match self.store.create_job(
-                schedule.org_id,
-                schedule.asset_id,
-                &schedule.target,
-                &schedule.assessment_type,
-                &schedule.profile,
-            ) {
+            match self
+                .store
+                .create_job(
+                    schedule.org_id,
+                    schedule.asset_id,
+                    &schedule.target,
+                    &schedule.assessment_type,
+                    &schedule.profile,
+                )
+                .await
+            {
                 Ok(job) => {
                     self.queue.submit_job(job, self.store.clone());
 
@@ -70,7 +74,8 @@ impl ScheduleRunner {
                     let next_run = calculate_next_run(&schedule.cron_expression, now);
                     let _ = self
                         .store
-                        .update_schedule_run_state(schedule.id, now, Some(next_run));
+                        .update_schedule_run_state(schedule.id, now, Some(next_run))
+                        .await;
                 }
                 Err(err) => {
                     tracing::error!("Failed to create job for schedule '{}': {err}", schedule.id);

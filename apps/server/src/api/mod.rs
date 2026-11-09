@@ -10,7 +10,7 @@ use axum::routing::get;
 use axum::Router;
 use std::sync::Arc;
 use std::time::Duration;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
@@ -20,10 +20,30 @@ pub fn create_router(state: Arc<AppState>) -> Router {
     let timeout_duration = Duration::from_secs(state.config.request_timeout_secs);
     let max_body_size = state.config.max_body_size_bytes;
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let mut origins = Vec::new();
+    for o in &state.config.allowed_origins {
+        if let Ok(val) = o.parse::<axum::http::HeaderValue>() {
+            origins.push(val);
+        }
+    }
+
+    let cors = if origins.is_empty() {
+        CorsLayer::new()
+    } else {
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::DELETE,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([
+                axum::http::header::AUTHORIZATION,
+                axum::http::header::CONTENT_TYPE,
+                axum::http::header::ACCEPT,
+            ])
+    };
 
     let v1_router = v1::router();
 

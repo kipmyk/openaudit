@@ -9,17 +9,19 @@ use serde_json::json;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::token::{verify_token, TokenClaims};
+use super::token::{verify_token_with_fallbacks, TokenClaims};
 use crate::state::AppState;
 use crate::store::models::Role;
 
 /// Authenticated user context injected into request handlers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthenticatedUser {
+    pub jti: Uuid,
     pub user_id: Uuid,
     pub org_id: Uuid,
     pub role: Role,
     pub email: String,
+    pub expires_at: i64,
 }
 
 impl AuthenticatedUser {
@@ -88,23 +90,46 @@ where
                     .into_response()
             })?;
 
-        let claims: TokenClaims = verify_token(token_str.trim(), &app_state.config.secret_key)
-            .map_err(|err| {
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({
-                        "error": "unauthorized",
-                        "message": format!("Invalid or expired token: {err}")
-                    })),
-                )
-                    .into_response()
-            })?;
+        let claims: TokenClaims = verify_token_with_fallbacks(
+            token_str.trim(),
+            &app_state.config.secret_key,
+            &app_state.config.fallback_secret_keys,
+        )
+        .map_err(|err| {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "unauthorized",
+                    "message": format!("Invalid or expired token: {err}")
+                })),
+            )
+                .into_response()
+        })?;
+
+        // Check if token has been explicitly revoked
+        if app_state
+            .store
+            .is_token_revoked(claims.jti)
+            .await
+            .unwrap_or(false)
+        {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "token_revoked",
+                    "message": "Authentication token has been revoked"
+                })),
+            )
+                .into_response());
+        }
 
         Ok(Self {
+            jti: claims.jti,
             user_id: claims.user_id,
             org_id: claims.org_id,
             role: claims.role,
             email: claims.email,
+            expires_at: claims.expires_at,
         })
     }
 }

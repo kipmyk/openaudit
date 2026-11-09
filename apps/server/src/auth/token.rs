@@ -13,6 +13,8 @@ type HmacSha256 = Hmac<Sha256>;
 /// Claims embedded within an authenticated session token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenClaims {
+    /// Unique token identifier for revocation and replay protection.
+    pub jti: Uuid,
     /// Authenticated user unique identifier.
     pub user_id: Uuid,
     /// Tenant organization identifier.
@@ -78,6 +80,7 @@ pub fn issue_token(
     let expires_at = now + ttl_seconds;
 
     let claims = TokenClaims {
+        jti: Uuid::new_v4(),
         user_id,
         org_id,
         role,
@@ -99,12 +102,18 @@ pub fn issue_token(
     Ok(format!("{payload_b64}.{sig_hex}"))
 }
 
-/// Validates a signed authentication token and returns its decoded claims.
+/// Validates a signed authentication token against primary and fallback rotation keys.
+///
+/// Uses constant-time signature comparison (`Mac::verify_slice`).
 ///
 /// # Errors
 ///
 /// Returns an error if the token is malformed, has an invalid signature, or is expired.
-pub fn verify_token(token_str: &str, secret_key: &str) -> Result<TokenClaims, String> {
+pub fn verify_token_with_fallbacks(
+    token_str: &str,
+    primary_secret: &str,
+    fallback_secrets: &[String],
+) -> Result<TokenClaims, String> {
     let (payload_hex, sig_hex) = token_str
         .split_once('.')
         .ok_or_else(|| "Malformed token format: expected payload.signature".to_string())?;
@@ -112,12 +121,26 @@ pub fn verify_token(token_str: &str, secret_key: &str) -> Result<TokenClaims, St
     let expected_sig_bytes =
         decode_hex(sig_hex).map_err(|e| format!("Invalid signature encoding: {e}"))?;
 
-    let mut mac = HmacSha256::new_from_slice(secret_key.as_bytes())
-        .map_err(|e| format!("HMAC key initialization failed: {e}"))?;
-    mac.update(payload_hex.as_bytes());
+    // Attempt verification with primary key
+    let mut keys_to_try = vec![primary_secret];
+    for fallback in fallback_secrets {
+        keys_to_try.push(fallback.as_str());
+    }
 
-    mac.verify_slice(&expected_sig_bytes)
-        .map_err(|_| "Invalid token cryptographic signature".to_string())?;
+    let mut valid = false;
+    for secret in keys_to_try {
+        if let Ok(mut mac) = HmacSha256::new_from_slice(secret.as_bytes()) {
+            mac.update(payload_hex.as_bytes());
+            if mac.verify_slice(&expected_sig_bytes).is_ok() {
+                valid = true;
+                break;
+            }
+        }
+    }
+
+    if !valid {
+        return Err("Invalid token cryptographic signature".to_string());
+    }
 
     let payload_bytes =
         decode_hex(payload_hex).map_err(|e| format!("Invalid payload encoding: {e}"))?;
@@ -129,6 +152,15 @@ pub fn verify_token(token_str: &str, secret_key: &str) -> Result<TokenClaims, St
     }
 
     Ok(claims)
+}
+
+/// Validates a signed authentication token and returns its decoded claims.
+///
+/// # Errors
+///
+/// Returns an error if the token is malformed, has an invalid signature, or is expired.
+pub fn verify_token(token_str: &str, secret_key: &str) -> Result<TokenClaims, String> {
+    verify_token_with_fallbacks(token_str, secret_key, &[])
 }
 
 #[cfg(test)]
@@ -186,5 +218,30 @@ mod tests {
 
         let err = verify_token(&token, secret).unwrap_err();
         assert!(err.contains("expired"));
+    }
+
+    #[test]
+    fn test_secret_rotation_verification() {
+        let old_secret = "old-secret-key-at-least-32-characters-long!";
+        let new_secret = "new-super-secret-key-at-least-32-characters!";
+        let fallbacks = vec![old_secret.to_string()];
+
+        let token = issue_token(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Role::Auditor,
+            "auditor@test.com",
+            3600,
+            old_secret,
+        )
+        .expect("Must issue token");
+
+        // Fails with new secret alone
+        assert!(verify_token(&token, new_secret).is_err());
+
+        // Succeeds with new secret + old secret in fallbacks
+        let claims = verify_token_with_fallbacks(&token, new_secret, &fallbacks)
+            .expect("Must verify with fallback");
+        assert_eq!(claims.email, "auditor@test.com");
     }
 }

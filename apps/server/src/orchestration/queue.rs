@@ -63,8 +63,9 @@ impl JobQueue {
             };
 
             // Transition to Running
-            if let Err(err) =
-                store.update_job_status(job.org_id, job.id, JobStatus::Running, None, None)
+            if let Err(err) = store
+                .update_job_status(job.org_id, job.id, JobStatus::Running, None, None)
+                .await
             {
                 tracing::error!("Failed to update job {} to Running: {err}", job.id);
                 if let Ok(mut map) = active_map.lock() {
@@ -80,13 +81,15 @@ impl JobQueue {
             match result {
                 Ok(summary) => {
                     let summary_json = serde_json::to_string(&summary).ok();
-                    let _ = store.update_job_status(
-                        job.org_id,
-                        job.id,
-                        JobStatus::Completed,
-                        summary_json.as_deref(),
-                        None,
-                    );
+                    let _ = store
+                        .update_job_status(
+                            job.org_id,
+                            job.id,
+                            JobStatus::Completed,
+                            summary_json.as_deref(),
+                            None,
+                        )
+                        .await;
                 }
                 Err(err) => {
                     let status = if cancel_token.load(Ordering::Relaxed) {
@@ -94,7 +97,9 @@ impl JobQueue {
                     } else {
                         JobStatus::Failed
                     };
-                    let _ = store.update_job_status(job.org_id, job.id, status, None, Some(&err));
+                    let _ = store
+                        .update_job_status(job.org_id, job.id, status, None, Some(&err))
+                        .await;
                 }
             }
 

@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -42,15 +43,29 @@ pub struct RegisterInitialAdminRequest {
     pub name: String,
 }
 
-/// `POST /api/v1/auth/login` - Authenticates user and issues signed session token.
+/// `POST /api/v1/auth/login` - Authenticates user and issues signed session token with rate limiting.
 pub async fn login_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<LoginRequest>,
 ) -> Response {
     let email = payload.email.trim().to_lowercase();
-    let user = match state.store.get_user_by_email(&email) {
+
+    // Check rate limiter to prevent brute-force attacks
+    if let Err(remaining_secs) = state.login_limiter.check_allowed(&email) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": "too_many_requests",
+                "message": format!("Too many failed login attempts. Please retry in {remaining_secs} seconds.")
+            })),
+        )
+            .into_response();
+    }
+
+    let user = match state.store.get_user_by_email(&email).await {
         Ok(Some(u)) => u,
         Ok(None) => {
+            state.login_limiter.record_failure(&email);
             return (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({
@@ -73,6 +88,7 @@ pub async fn login_handler(
     };
 
     if !user.is_active {
+        state.login_limiter.record_failure(&email);
         return (
             StatusCode::FORBIDDEN,
             Json(json!({
@@ -83,18 +99,19 @@ pub async fn login_handler(
             .into_response();
     }
 
-    match verify_password(&payload.password, &user.password_hash) {
-        Ok(true) => (),
-        _ => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "invalid_credentials",
-                    "message": "Invalid email or password"
-                })),
-            )
-                .into_response();
-        }
+    if verify_password(&payload.password, &user.password_hash) == Ok(true) {
+        // Password matches: clear failed attempt count
+        state.login_limiter.record_success(&email);
+    } else {
+        state.login_limiter.record_failure(&email);
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "invalid_credentials",
+                "message": "Invalid email or password"
+            })),
+        )
+            .into_response();
     }
 
     // Issue token valid for 24 hours (86400 seconds)
@@ -112,7 +129,7 @@ pub async fn login_handler(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({
                     "error": "token_issuance_failed",
-                    "message": format!("Failed to sign authentication token: {err}")
+                    "message": err
                 })),
             )
                 .into_response();
@@ -135,28 +152,13 @@ pub async fn login_handler(
         .into_response()
 }
 
-/// `POST /api/v1/auth/bootstrap` - Initializes the first tenant organization and admin user.
+/// `POST /api/v1/auth/bootstrap` - Initializes the first tenant organization and admin user atomically.
 pub async fn bootstrap_handler(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<RegisterInitialAdminRequest>,
 ) -> Response {
     let org_slug = payload.org_slug.trim().to_lowercase();
-    let org = match state
-        .store
-        .create_organization(&payload.org_name, &org_slug)
-    {
-        Ok(o) => o,
-        Err(err) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": "organization_conflict",
-                    "message": format!("Failed to create organization: {err}")
-                })),
-            )
-                .into_response();
-        }
-    };
+    let email = payload.email.trim().to_lowercase();
 
     let p_hash = match hash_password(&payload.password) {
         Ok(h) => h,
@@ -172,28 +174,29 @@ pub async fn bootstrap_handler(
         }
     };
 
-    let user =
-        match state
-            .store
-            .create_user(org.id, &payload.email, &p_hash, &payload.name, Role::Admin)
-        {
-            Ok(u) => u,
-            Err(err) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({
-                        "error": "user_creation_failed",
-                        "message": format!("Failed to create admin user: {err}")
-                    })),
-                )
-                    .into_response();
-            }
-        };
+    // Execute atomic bootstrap transaction
+    let (org, user) = match state
+        .store
+        .bootstrap_admin(&payload.org_name, &org_slug, &payload.name, &email, &p_hash)
+        .await
+    {
+        Ok(res) => res,
+        Err(err) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "bootstrap_conflict",
+                    "message": format!("Bootstrap failed: {err}")
+                })),
+            )
+                .into_response();
+        }
+    };
 
     let token = match issue_token(
         user.id,
-        user.org_id,
-        user.role,
+        org.id,
+        Role::Admin,
         &user.email,
         86400,
         &state.config.secret_key,
@@ -217,31 +220,63 @@ pub async fn bootstrap_handler(
             token,
             user: UserProfile {
                 id: user.id.to_string(),
-                org_id: user.org_id.to_string(),
+                org_id: org.id.to_string(),
                 email: user.email,
                 name: user.name,
-                role: user.role.as_str(),
+                role: "admin",
             },
         }),
     )
         .into_response()
 }
 
-/// `GET /api/v1/auth/me` - Returns caller's profile and tenant context.
+/// `POST /api/v1/auth/logout` - Revokes the current session token.
+pub async fn logout_handler(
+    State(state): State<Arc<AppState>>,
+    auth: AuthenticatedUser,
+) -> Response {
+    let exp = chrono::DateTime::from_timestamp(auth.expires_at, 0).unwrap_or_else(Utc::now);
+
+    match state.store.revoke_token(auth.jti, exp).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(json!({
+                "message": "Successfully logged out and revoked session token"
+            })),
+        )
+            .into_response(),
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": "logout_failed",
+                "message": format!("Failed to record token revocation: {err}")
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// `GET /api/v1/auth/me` - Returns details of the currently authenticated session.
 pub async fn me_handler(State(state): State<Arc<AppState>>, auth: AuthenticatedUser) -> Response {
-    let org = state.store.get_organization(auth.org_id).ok().flatten();
+    let org = state
+        .store
+        .get_organization(auth.org_id)
+        .await
+        .ok()
+        .flatten();
 
     (
         StatusCode::OK,
         Json(json!({
             "user_id": auth.user_id.to_string(),
             "org_id": auth.org_id.to_string(),
-            "email": auth.email,
             "role": auth.role.as_str(),
+            "email": auth.email,
             "organization": org.map(|o| json!({
                 "id": o.id.to_string(),
                 "name": o.name,
-                "slug": o.slug
+                "slug": o.slug,
+                "created_at": o.created_at.to_rfc3339()
             }))
         })),
     )
