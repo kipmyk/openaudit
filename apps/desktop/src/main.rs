@@ -239,6 +239,30 @@ fn run_desktop_app() -> Result<ExitCode, Box<dyn std::error::Error>> {
                             }
                         }
                     }
+                    "clipboard_copy" => {
+                        if let Some(text) = parsed["text"].as_str() {
+                            use std::io::Write;
+                            if let Ok(mut child) = Command::new("pbcopy")
+                                .stdin(std::process::Stdio::piped())
+                                .spawn()
+                            {
+                                if let Some(mut stdin) = child.stdin.take() {
+                                    let _ = stdin.write_all(text.as_bytes());
+                                }
+                                let _ = child.wait();
+                            }
+                        }
+                    }
+                    "clipboard_paste" => {
+                        if let Ok(output) = Command::new("pbpaste").output() {
+                            let text = String::from_utf8_lossy(&output.stdout).to_string();
+                            if let Ok(json_text) = serde_json::to_string(&text) {
+                                let _ = webview.evaluate_script(&format!(
+                                    "window.onNativeClipboardPaste({json_text});"
+                                ));
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

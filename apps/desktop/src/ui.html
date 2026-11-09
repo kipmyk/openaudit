@@ -261,12 +261,24 @@
 
           <div style="display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; margin-bottom: 14px;">
             <div>
-              <label style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Target Hostname or IP</label>
-              <input type="text" id="remote-target-input" class="input" placeholder="e.g. 192.0.2.10 or scanme.nmap.org" value="192.0.2.10" onfocus="this.select()" onclick="this.select()" autocomplete="off" spellcheck="false" style="width: 100%;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Target Hostname or IP</label>
+                <div style="display: flex; gap: 4px;">
+                  <button type="button" class="btn btn-sm" onclick="pasteToTarget('remote-target-input')" style="padding: 2px 6px; font-size: 10px; height: 18px; line-height: 1; cursor: pointer;">Paste</button>
+                  <button type="button" class="btn btn-sm" onclick="clearInput('remote-target-input')" style="padding: 2px 6px; font-size: 10px; height: 18px; line-height: 1; cursor: pointer;">Clear</button>
+                </div>
+              </div>
+              <input type="text" id="remote-target-input" class="input" placeholder="e.g. 192.0.2.10 or scanme.nmap.org" value="192.0.2.10" onfocus="this.select()" autocomplete="off" spellcheck="false" style="width: 100%;">
             </div>
             <div>
-              <label style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Port Range</label>
-              <input type="text" id="remote-port-input" class="input" placeholder="e.g. 80, 443, 8080 or 1-1024" value="80, 443, 8080, 8443, 22" onfocus="this.select()" onclick="this.select()" autocomplete="off" spellcheck="false" style="width: 100%;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <label style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted);">Port Range</label>
+                <div style="display: flex; gap: 4px;">
+                  <button type="button" class="btn btn-sm" onclick="pasteToTarget('remote-port-input')" style="padding: 2px 6px; font-size: 10px; height: 18px; line-height: 1; cursor: pointer;">Paste</button>
+                  <button type="button" class="btn btn-sm" onclick="clearInput('remote-port-input')" style="padding: 2px 6px; font-size: 10px; height: 18px; line-height: 1; cursor: pointer;">Clear</button>
+                </div>
+              </div>
+              <input type="text" id="remote-port-input" class="input" placeholder="e.g. 80, 443, 8080 or 1-1024" value="80, 443, 8080, 8443, 22" onfocus="this.select()" autocomplete="off" spellcheck="false" style="width: 100%;">
             </div>
             <div>
               <label style="display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); margin-bottom: 4px;">Scan Profile</label>

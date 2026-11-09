@@ -873,6 +873,37 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+function clearInput(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.value = '';
+    el.focus();
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}
+
+function pasteToTarget(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.focus();
+    sendIpc('clipboard_paste');
+  }
+}
+
+window.onNativeClipboardPaste = function(text) {
+  if (typeof text !== 'string') return;
+  const el = document.activeElement;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+    const start = el.selectionStart !== undefined ? el.selectionStart : el.value.length;
+    const end = el.selectionEnd !== undefined ? el.selectionEnd : el.value.length;
+    const before = el.value.substring(0, start);
+    const after = el.value.substring(end);
+    el.value = before + text + after;
+    el.selectionStart = el.selectionEnd = start + text.length;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+};
+
 // Keyboard Shortcuts for Accessibility & Navigation (Capture Phase for WebView)
 document.addEventListener('keydown', (e) => {
   const isInput = document.activeElement && (
@@ -883,13 +914,13 @@ document.addEventListener('keydown', (e) => {
 
   const isCmdOrCtrl = e.metaKey || e.ctrlKey;
 
+  // Universal Edit Shortcuts (Select All, Copy, Cut, Paste) in WebView
   if (isCmdOrCtrl) {
     const isA = e.key === 'a' || e.key === 'A' || e.code === 'KeyA';
     const isC = e.key === 'c' || e.key === 'C' || e.code === 'KeyC';
     const isX = e.key === 'x' || e.key === 'X' || e.code === 'KeyX';
     const isV = e.key === 'v' || e.key === 'V' || e.code === 'KeyV';
 
-    // Universal Edit Shortcuts (Select All, Copy, Cut, Paste) in WebView
     if (isA && isInput) {
       e.preventDefault();
       e.stopPropagation();
@@ -904,9 +935,8 @@ document.addEventListener('keydown', (e) => {
       const el = document.activeElement;
       const sel = el.value ? el.value.substring(el.selectionStart, el.selectionEnd) : '';
       if (sel) {
-        navigator.clipboard.writeText(sel).catch(() => {
-          document.execCommand('copy');
-        });
+        sendIpc('clipboard_copy', { text: sel });
+        try { navigator.clipboard.writeText(sel); } catch (_) {}
       }
       return;
     } else if (isX && isInput) {
@@ -915,9 +945,8 @@ document.addEventListener('keydown', (e) => {
         const start = el.selectionStart;
         const end = el.selectionEnd;
         const sel = el.value.substring(start, end);
-        navigator.clipboard.writeText(sel).catch(() => {
-          document.execCommand('cut');
-        });
+        sendIpc('clipboard_copy', { text: sel });
+        try { navigator.clipboard.writeText(sel); } catch (_) {}
         el.value = el.value.substring(0, start) + el.value.substring(end);
         el.selectionStart = el.selectionEnd = start;
         el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -926,20 +955,9 @@ document.addEventListener('keydown', (e) => {
       }
       return;
     } else if (isV && isInput) {
-      const el = document.activeElement;
-      if (el.selectionStart !== undefined) {
-        navigator.clipboard.readText().then(text => {
-          if (text) {
-            const start = el.selectionStart;
-            const end = el.selectionEnd;
-            el.value = el.value.substring(0, start) + text + el.value.substring(end);
-            el.selectionStart = el.selectionEnd = start + text.length;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-        }).catch(() => {
-          document.execCommand('paste');
-        });
-      }
+      e.preventDefault();
+      e.stopPropagation();
+      sendIpc('clipboard_paste');
       return;
     }
 
@@ -953,6 +971,38 @@ document.addEventListener('keydown', (e) => {
       else if (e.key === '6') { e.preventDefault(); showTab('report'); }
       else if (e.key === '7') { e.preventDefault(); showTab('settings'); }
       else if (e.key.toLowerCase() === 'r') { e.preventDefault(); runAudit(); }
+    }
+  } else if (isInput && (e.key === 'Backspace' || e.key === 'Delete' || e.code === 'Backspace' || e.code === 'Delete')) {
+    // Explicit Backspace and Delete handling for inputs
+    const el = document.activeElement;
+    if (el.selectionStart !== undefined) {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      if (start !== end) {
+        // Range selected (e.g. Cmd+A or onfocus select): delete the selected range
+        e.preventDefault();
+        e.stopPropagation();
+        el.value = el.value.substring(0, start) + el.value.substring(end);
+        el.selectionStart = el.selectionEnd = start;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      } else if ((e.key === 'Backspace' || e.code === 'Backspace') && start > 0) {
+        // Backspace: delete character to the left
+        e.preventDefault();
+        e.stopPropagation();
+        el.value = el.value.substring(0, start - 1) + el.value.substring(start);
+        el.selectionStart = el.selectionEnd = start - 1;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      } else if ((e.key === 'Delete' || e.code === 'Delete') && start < el.value.length) {
+        // Delete: delete character to the right
+        e.preventDefault();
+        e.stopPropagation();
+        el.value = el.value.substring(0, start) + el.value.substring(start + 1);
+        el.selectionStart = el.selectionEnd = start;
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
     }
   } else if (e.altKey && !isInput) {
     if (e.key === '1') { e.preventDefault(); filterRulesPlatform('MacOS'); }
