@@ -156,7 +156,7 @@ fn test_server_auditing_rule_coverage_and_invariants() {
 
 /// Regression test proving that rule totals and platform execution counts are 100% consistent:
 /// - 43 total registered rules (20 Linux, 12 Windows, 11 macOS).
-/// - On macOS: exactly 32 rules are marked UnsupportedPlatform (20 Linux + 12 Windows).
+/// - On macOS: exactly 32 rules are marked `UnsupportedPlatform` (20 Linux + 12 Windows).
 /// - On macOS Baseline: 9 executed + 2 profile-excluded + 32 unsupported = 43 total.
 /// - On macOS Hardened: 11 executed + 0 profile-excluded + 32 unsupported = 43 total.
 #[test]
@@ -165,7 +165,11 @@ fn test_audit_rule_accounting_exact_counts_and_invariants() {
 
     let org_id = OrganizationId::from_seed(b"openaudit:rule-accounting:test-org");
     let engine = AuditEngine::default();
-    assert_eq!(engine.rules().len(), 43, "Engine must register exactly 43 rules");
+    assert_eq!(
+        engine.rules().len(),
+        43,
+        "Engine must register exactly 43 rules"
+    );
 
     // 1. Baseline profile evaluation
     let baseline_report = engine
@@ -205,7 +209,10 @@ fn test_audit_rule_accounting_exact_counts_and_invariants() {
     );
 
     // Sum invariant: 32 + 2 + 9 == 43
-    assert_eq!(baseline_unsupported + baseline_excluded + baseline_executed, 43);
+    assert_eq!(
+        baseline_unsupported + baseline_excluded + baseline_executed,
+        43
+    );
 
     // 2. Hardened profile evaluation
     let hardened_report = engine

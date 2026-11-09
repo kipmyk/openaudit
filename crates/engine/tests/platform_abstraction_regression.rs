@@ -265,3 +265,132 @@ fn test_platform_capability_matching_and_filtering() {
     assert!(!backend.has_capability(PlatformCapability::MacosGatekeeper));
     assert!(!backend.has_capability(PlatformCapability::MacosSip));
 }
+
+/// Comprehensive regression test verifying rule accounting semantics across all platform scopes:
+/// 1. Rules applicable to current OS and included in profile.
+/// 2. Rules applicable to current OS but excluded by selected profile.
+/// 3. Rules unsupported on current OS.
+/// 4. Total registered rules partitioned by operating system (11 macOS, 20 Linux, 12 Windows = 43 total).
+/// 5. Guarantees profile-excluded rules are NEVER counted as platform-unsupported rules.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn test_rule_accounting_semantics_partitioning_and_profile_invariants() {
+    let org_id = OrganizationId::from_seed(b"openaudit:rule-accounting-regression");
+    let engine = AuditEngine::default();
+    let rules = engine.rules();
+    assert_eq!(
+        rules.len(),
+        43,
+        "Engine must register exactly 43 total rules"
+    );
+
+    // Partition verification: 11 macOS, 20 Linux, 12 Windows
+    let macos_rules: Vec<_> = rules
+        .iter()
+        .filter(|r| r.target_platforms().contains(&PlatformFamily::MacOS))
+        .collect();
+    let linux_rules: Vec<_> = rules
+        .iter()
+        .filter(|r| r.target_platforms().contains(&PlatformFamily::Linux))
+        .collect();
+    let windows_rules: Vec<_> = rules
+        .iter()
+        .filter(|r| r.target_platforms().contains(&PlatformFamily::Windows))
+        .collect();
+
+    assert_eq!(macos_rules.len(), 11, "Must contain exactly 11 macOS rules");
+    assert_eq!(linux_rules.len(), 20, "Must contain exactly 20 Linux rules");
+    assert_eq!(
+        windows_rules.len(),
+        12,
+        "Must contain exactly 12 Windows rules"
+    );
+    assert_eq!(
+        macos_rules.len() + linux_rules.len() + windows_rules.len(),
+        43
+    );
+
+    // Profile partition per platform
+    let mac_baseline = macos_rules
+        .iter()
+        .filter(|r| r.profile() == AuditProfile::Baseline)
+        .count();
+    let mac_hardened = macos_rules
+        .iter()
+        .filter(|r| r.profile() == AuditProfile::Hardened)
+        .count();
+    assert_eq!(mac_baseline, 9, "9 macOS baseline rules");
+    assert_eq!(mac_hardened, 2, "2 macOS hardened-only rules");
+
+    let linux_baseline = linux_rules
+        .iter()
+        .filter(|r| r.profile() == AuditProfile::Baseline)
+        .count();
+    assert_eq!(linux_baseline, 20, "20 Linux baseline rules");
+
+    let win_baseline = windows_rules
+        .iter()
+        .filter(|r| r.profile() == AuditProfile::Baseline)
+        .count();
+    let win_hardened = windows_rules
+        .iter()
+        .filter(|r| r.profile() == AuditProfile::Hardened)
+        .count();
+    assert_eq!(win_baseline, 11, "11 Windows baseline rules");
+    assert_eq!(win_hardened, 1, "1 Windows hardened-only rule");
+
+    // Run on current host under Baseline profile
+    let baseline_report = engine
+        .run_audit_with_profile(org_id, AuditProfile::Baseline)
+        .expect("Baseline audit must succeed");
+
+    #[cfg(target_os = "macos")]
+    {
+        let unsupported_count = baseline_report
+            .check_statuses
+            .iter()
+            .filter(|s| matches!(s.status, CheckExecutionStatus::UnsupportedPlatform { .. }))
+            .count();
+        let excluded_count = baseline_report
+            .check_statuses
+            .iter()
+            .filter(|s| matches!(s.status, CheckExecutionStatus::NotApplicable { .. }))
+            .count();
+        let executed_count = baseline_report
+            .check_statuses
+            .iter()
+            .filter(|s| matches!(s.status, CheckExecutionStatus::Executed { .. }))
+            .count();
+
+        // On macOS: exactly 32 rules are unsupported (20 Linux + 12 Windows)
+        assert_eq!(
+            unsupported_count, 32,
+            "Unsupported count must equal non-macOS rules"
+        );
+        // On macOS Baseline: exactly 2 rules excluded by profile (macOS hardened rules)
+        assert_eq!(
+            excluded_count, 2,
+            "Profile-excluded count must equal macOS hardened-only rules"
+        );
+        // On macOS Baseline: exactly 9 rules executed
+        assert_eq!(
+            executed_count, 9,
+            "Executed count must equal macOS baseline rules"
+        );
+        // Sum invariant
+        assert_eq!(unsupported_count + excluded_count + executed_count, 43);
+
+        // Verify that profile-excluded rules are NOT marked UnsupportedPlatform
+        for status in &baseline_report.check_statuses {
+            if status.rule_id == "macos.remote.login-enabled"
+                || status.rule_id == "macos.remote.management-enabled"
+            {
+                assert!(
+                    matches!(status.status, CheckExecutionStatus::NotApplicable { .. }),
+                    "macOS hardened rule {} must be NotApplicable, NOT UnsupportedPlatform",
+                    status.rule_id
+                );
+            }
+        }
+    }
+}

@@ -355,9 +355,7 @@ fn render_human_report(report: &AuditReport, min_severity: Severity) {
         let total_checks = report.check_statuses.len();
 
         if unsupported_count > 0 {
-            println!(
-                "Note: {unsupported_count} checks were skipped due to platform boundaries."
-            );
+            println!("Note: {unsupported_count} checks were skipped due to platform boundaries.");
         }
         if profile_excluded_count > 0 {
             println!(
