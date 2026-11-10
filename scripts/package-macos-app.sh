@@ -73,7 +73,22 @@ fi
 # 6. Create distributable zip archive
 ZIP_NAME="OpenAudit-${VERSION}-macos-aarch64.zip"
 echo "[*] Creating distributable archive: ${ZIP_NAME}..."
+rm -f "${DIST_DIR}/${ZIP_NAME}"
 (cd "${DIST_DIR}" && zip -r -q "${ZIP_NAME}" "OpenAudit.app")
+
+# 7. Update SHA256SUMS
+(
+    cd "${DIST_DIR}"
+    shopt -s nullglob
+    PKG_FILES=(*.deb *.tar.gz *.zip)
+    if [ "${#PKG_FILES[@]}" -gt 0 ]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${PKG_FILES[@]}" > SHA256SUMS
+        elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "${PKG_FILES[@]}" > SHA256SUMS
+        fi
+    fi
+)
 
 echo "================================================================================"
 echo "[+] macOS Application Bundle Created Successfully:"

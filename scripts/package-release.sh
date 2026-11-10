@@ -18,8 +18,22 @@ WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${WORKSPACE_ROOT}/artifacts/packages"
 
 VERSION="0.1.0-alpha.0"
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
-ARCH="$(uname -m)"
+RUST_TARGET="${1:-}"
+if [ "${RUST_TARGET}" = "--target" ]; then
+    RUST_TARGET="${2:-}"
+fi
+
+if [ -n "${RUST_TARGET}" ]; then
+    case "${RUST_TARGET}" in
+        *linux*) OS="linux" ;;
+        *darwin*) OS="darwin" ;;
+        *) OS="$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+    esac
+    ARCH="${RUST_TARGET%%-*}"
+else
+    OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+    ARCH="$(uname -m)"
+fi
 
 # Normalize architecture strings
 case "${ARCH}" in
@@ -45,12 +59,19 @@ mkdir -p "${DIST_DIR}"
 
 # 1. Compile workspace binaries in release mode
 echo "[*] Compiling release binaries..."
-cargo build --release --bins
+if [ -n "${RUST_TARGET}" ]; then
+    cargo build --release --target "${RUST_TARGET}" -p openaudit-cli -p openaudit-agent -p openaudit-server --bins
+    TARGET_DIR="${CARGO_TARGET_DIR:-${WORKSPACE_ROOT}/target}/${RUST_TARGET}/release"
+else
+    cargo build --release --bins
+    TARGET_DIR="${CARGO_TARGET_DIR:-${WORKSPACE_ROOT}/target}/release"
+fi
 
 # Determine target directory
-TARGET_DIR="${CARGO_TARGET_DIR:-${WORKSPACE_ROOT}/target}/release"
 if [ ! -f "${TARGET_DIR}/openaudit-cli" ]; then
-    if [ -f "${WORKSPACE_ROOT}/target/release/openaudit-cli" ]; then
+    if [ -n "${RUST_TARGET}" ] && [ -f "${WORKSPACE_ROOT}/target/${RUST_TARGET}/release/openaudit-cli" ]; then
+        TARGET_DIR="${WORKSPACE_ROOT}/target/${RUST_TARGET}/release"
+    elif [ -f "${WORKSPACE_ROOT}/target/release/openaudit-cli" ]; then
         TARGET_DIR="${WORKSPACE_ROOT}/target/release"
     else
         echo "[-] Error: Built binaries not found in ${TARGET_DIR}." >&2
@@ -149,11 +170,16 @@ fi
 # 4. Generate SHA256 checksums
 echo "[*] Generating SHA-256 integrity manifest..."
 cd "${DIST_DIR}"
-if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum *.deb *.tar.gz 2>/dev/null > SHA256SUMS || true
-elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 *.deb *.tar.gz 2>/dev/null > SHA256SUMS || true
+shopt -s nullglob
+PKG_FILES=(*.deb *.tar.gz *.zip)
+if [ "${#PKG_FILES[@]}" -gt 0 ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "${PKG_FILES[@]}" > SHA256SUMS
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "${PKG_FILES[@]}" > SHA256SUMS
+    fi
 fi
+shopt -u nullglob
 
 echo "================================================================================"
 echo " Packages Built Successfully:"

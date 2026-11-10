@@ -32,8 +32,18 @@ echo "[+] Release packages available:"
 cat "${DIST_DIR}/SHA256SUMS"
 echo ""
 
-# Identify package files
-DEB_PKG="$(find "${DIST_DIR}" -name "*.deb" | head -n 1)"
+# Identify package files matching host architecture
+HOST_ARCH="$(uname -m)"
+case "${HOST_ARCH}" in
+    x86_64|amd64) HOST_DEB_ARCH="amd64" ;;
+    aarch64|arm64) HOST_DEB_ARCH="arm64" ;;
+    *) HOST_DEB_ARCH="${HOST_ARCH}" ;;
+esac
+
+DEB_PKG="$(find "${DIST_DIR}" -name "*_${HOST_DEB_ARCH}.deb" | head -n 1)"
+if [ -z "${DEB_PKG}" ]; then
+    DEB_PKG="$(find "${DIST_DIR}" -name "*.deb" | head -n 1)"
+fi
 TAR_PKG="$(find "${DIST_DIR}" -name "*.tar.gz" | head -n 1)"
 
 if [ -z "${DEB_PKG}" ] || [ ! -f "${DEB_PKG}" ]; then
@@ -46,18 +56,24 @@ DEB_BASENAME="$(basename "${DEB_PKG}")"
 test_clean_linux() {
     local distro_image="$1"
     local distro_name="$2"
+    local deb_file="${3:-${DEB_BASENAME}}"
+    local platform_arg=()
+    if [ -n "${4:-}" ]; then
+        platform_arg=(--platform "$4")
+    fi
 
     echo "--------------------------------------------------------------------------------"
-    echo " Testing on Clean Environment: ${distro_name} (${distro_image})"
+    echo " Testing on Clean Environment: ${distro_name} (${distro_image}) [${deb_file}]"
     echo "--------------------------------------------------------------------------------"
 
     docker run --rm \
+        "${platform_arg[@]}" \
         -v "${DIST_DIR}:/packages:ro" \
         "${distro_image}" \
         bash -c "
             set -euo pipefail
 
-            echo '[1/5] Verifying environment is clean (no dev toolchains)...'
+            echo '[1/6] Verifying environment is clean (no dev toolchains)...'
             if command -v rustc >/dev/null 2>&1; then echo '[-] ERROR: rustc found!'; exit 1; fi
             if command -v cargo >/dev/null 2>&1; then echo '[-] ERROR: cargo found!'; exit 1; fi
             if command -v node >/dev/null 2>&1; then echo '[-] ERROR: node found!'; exit 1; fi
@@ -65,20 +81,26 @@ test_clean_linux() {
             if command -v gcc >/dev/null 2>&1; then echo '[-] ERROR: gcc found!'; exit 1; fi
             echo '[+] Confirmed: Zero development toolchains installed.'
 
-            echo '[2/5] Installing OpenAudit native package (${DEB_BASENAME})...'
-            dpkg -i /packages/${DEB_BASENAME}
+            echo '[2/6] Installing OpenAudit native package (${deb_file})...'
+            dpkg -i /packages/${deb_file}
 
-            echo '[3/5] Verifying binary installation and version...'
+            echo '[3/6] Verifying CLI, Server, and Agent binary installation and versions...'
             test -x /usr/bin/openaudit
             test -x /usr/bin/openaudit-cli
+            test -x /usr/bin/openaudit-server
+            test -x /usr/bin/openaudit-agent
             openaudit version
             openaudit --help >/dev/null
+            openaudit-server --version
+            openaudit-server --help >/dev/null
+            openaudit-agent --version
+            openaudit-agent --help >/dev/null
 
-            echo '[4/5] Executing live audit scan...'
+            echo '[4/6] Executing live audit scan...'
             openaudit system info
             openaudit scan --profile baseline --format human
 
-            echo '[5/5] Generating standalone HTML audit report...'
+            echo '[5/6] Generating standalone HTML audit report...'
             openaudit scan --profile hardened --format json --output /tmp/audit-results.json
             openaudit report --input /tmp/audit-results.json --format html --output /tmp/audit-report.html
 
@@ -86,6 +108,14 @@ test_clean_linux() {
             test -s /tmp/audit-report.html
             grep -q '<!DOCTYPE html>' /tmp/audit-report.html
             grep -q 'OpenAudit Report' /tmp/audit-report.html
+
+            echo '[6/6] Verifying clean package removal and purge...'
+            dpkg -r openaudit
+            dpkg -P openaudit
+            test ! -e /usr/bin/openaudit
+            test ! -e /usr/bin/openaudit-cli
+            test ! -e /usr/bin/openaudit-server
+            test ! -e /usr/bin/openaudit-agent
 
             echo '[+] Clean environment verification SUCCEEDED on ${distro_name}!'
         "

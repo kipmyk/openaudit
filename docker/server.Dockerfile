@@ -1,7 +1,7 @@
 # Multi-stage production build for OpenAudit Control Plane Server
 # Milestone 8: Reproducible Self-Hosted Deployment
 
-FROM rust:1.85-bookworm AS builder
+FROM rust:1-bookworm AS builder
 
 WORKDIR /src
 COPY . .

@@ -1,7 +1,7 @@
 # Multi-stage production build for OpenAudit Distributed Agent Daemon
 # Milestone 8: Distributed Fleet Deployment
 
-FROM rust:1.85-bookworm AS builder
+FROM rust:1-bookworm AS builder
 
 WORKDIR /src
 COPY . .
