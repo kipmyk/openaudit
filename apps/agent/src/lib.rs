@@ -2,6 +2,22 @@
 //!
 //! Exposes agent client and daemon communication infrastructure for integration
 //! and outbound task execution.
+//!
+//! # Examples
+//!
+//! ```
+//! use openaudit_agent::AgentDaemonConfig;
+//! use std::path::PathBuf;
+//!
+//! let cfg = AgentDaemonConfig {
+//!     server_url: "https://audit.example.com".to_string(),
+//!     state_dir: PathBuf::from("/var/lib/openaudit-agent"),
+//!     poll_interval_secs: 30,
+//!     heartbeat_interval_secs: 60,
+//!     max_backoff_secs: 300,
+//! };
+//! assert_eq!(cfg.poll_interval_secs, 30);
+//! ```
 
 #![allow(
     clippy::missing_errors_doc,

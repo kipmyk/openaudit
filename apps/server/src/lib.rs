@@ -1,6 +1,16 @@
 //! # OpenAudit Server Library
 //!
 //! Control plane API, persistence layer, assessment orchestration, and task scheduler.
+//!
+//! # Examples
+//!
+//! ```
+//! use openaudit_server::auth::token::{decode_hex, encode_hex};
+//!
+//! let encoded = encode_hex(&[0xde, 0xad, 0xbe, 0xef]);
+//! assert_eq!(encoded, "deadbeef");
+//! assert_eq!(decode_hex(&encoded).unwrap(), vec![0xde, 0xad, 0xbe, 0xef]);
+//! ```
 
 #![allow(
     clippy::missing_errors_doc,

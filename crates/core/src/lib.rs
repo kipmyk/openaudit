@@ -27,6 +27,23 @@ pub use scan::{AssessmentType, JobStatus, Scan, ScanJob, ScanStatus, ScanSummary
 pub use severity::Severity;
 
 /// Returns the current version of the OpenAudit core domain library.
+///
+/// # Examples
+///
+/// ```
+/// use openaudit_core::{version, AssetId, Fingerprint, ScanSummary, Severity};
+///
+/// assert_eq!(version(), "0.1.0-alpha.0");
+///
+/// let asset_id = AssetId::new();
+/// let fp = Fingerprint::compute(asset_id, "ssh.permit-root-login", "/etc/ssh/sshd_config");
+/// assert_eq!(fp.as_str().len(), 64);
+///
+/// let mut summary = ScanSummary::default();
+/// summary.record(Severity::Critical);
+/// summary.record(Severity::High);
+/// assert_eq!(summary.total(), 2);
+/// ```
 #[must_use]
 pub const fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

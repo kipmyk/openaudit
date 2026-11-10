@@ -2,6 +2,20 @@
 //!
 //! Network perimeter scanning foundation providing canonical target parsing,
 //! scope authorization, SSRF protection, and pinned DNS resolution.
+//!
+//! # Examples
+//!
+//! ```
+//! use openaudit_network::{CanonicalTarget, IpCidr};
+//! use std::net::IpAddr;
+//!
+//! let target = CanonicalTarget::parse("https://example.com:8443/health").unwrap();
+//! assert_eq!(target.normalized_host, "example.com");
+//! assert_eq!(target.port, Some(8443));
+//!
+//! let cidr = IpCidr::parse("10.20.0.0/16").unwrap();
+//! assert!(cidr.contains("10.20.5.99".parse::<IpAddr>().unwrap()));
+//! ```
 
 pub mod assessment;
 pub mod error;

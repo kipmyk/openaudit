@@ -27,6 +27,18 @@ pub use rule::{builtin::default_linux_rules, Rule, RuleFinding};
 pub use runner::{AuditEngine, AuditFindingItem, AuditReport};
 
 /// Returns the current version of the OpenAudit inspection engine.
+///
+/// # Examples
+///
+/// ```
+/// use openaudit_engine::{default_linux_rules, version, AuditProfile};
+/// use std::str::FromStr;
+///
+/// assert_eq!(version(), "0.1.0-alpha.0");
+/// assert!(!default_linux_rules().is_empty());
+/// assert_eq!(AuditProfile::from_str("baseline").unwrap(), AuditProfile::Baseline);
+/// assert_eq!(AuditProfile::Hardened.to_string(), "hardened");
+/// ```
 #[must_use]
 pub const fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
