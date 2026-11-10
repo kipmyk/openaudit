@@ -173,7 +173,7 @@ impl RustCryptoSpkiValidator {
         }
 
         // RSA modulus N = p * q must be an odd composite number
-        if effective_bytes.last().map_or(true, |b| b % 2 == 0) {
+        if effective_bytes.last().is_none_or(|b| b % 2 == 0) {
             return Err(ProtocolError::MalformedDerKey(
                 "RSA modulus is even (composite of 2)".to_string(),
             ));

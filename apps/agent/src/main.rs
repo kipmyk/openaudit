@@ -186,7 +186,7 @@ fn read_strict_secret_file(path: &Path) -> Result<[u8; 32], String> {
 /// Decodes an even-length hex string into raw bytes.
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
     let clean = s.trim();
-    if clean.len() % 2 != 0 {
+    if !clean.len().is_multiple_of(2) {
         return Err(format!(
             "hex string has odd length {} (must be even)",
             clean.len()

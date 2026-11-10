@@ -102,7 +102,7 @@ pub struct ScanSummary {
 
 impl ScanSummary {
     /// Increments the finding counter corresponding to the given severity.
-    pub fn record(&mut self, severity: Severity) {
+    pub const fn record(&mut self, severity: Severity) {
         match severity {
             Severity::Critical => self.critical += 1,
             Severity::High => self.high += 1,

@@ -497,7 +497,7 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], ProtocolError> {
 }
 
 fn hex_decode_bytes(hex: &str) -> Result<Vec<u8>, ProtocolError> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(ProtocolError::TlsError(
             "invalid hex string length".to_string(),
         ));

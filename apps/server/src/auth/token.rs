@@ -51,7 +51,7 @@ pub fn encode_hex(bytes: &[u8]) -> String {
 /// # Errors
 /// Returns error if length is odd or characters are invalid.
 pub fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
+    if !s.len().is_multiple_of(2) {
         return Err("Hex string must have an even length".into());
     }
     (0..s.len())

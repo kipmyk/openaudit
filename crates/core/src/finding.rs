@@ -204,7 +204,7 @@ impl Finding {
     }
 
     /// Suppresses the finding from active alerts.
-    pub fn suppress(&mut self) {
+    pub const fn suppress(&mut self) {
         self.status = FindingStatus::Suppressed;
     }
 }
