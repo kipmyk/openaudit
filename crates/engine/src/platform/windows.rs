@@ -108,11 +108,11 @@ impl<FS: FileSystem, CR: CommandRunner> WindowsPlatformBackend<FS, CR> {
                 format!("10.0.{build_str}"),
             )
         } else if caption.contains("Server 2022")
-            || (caption.contains("Server") && build_num == 20348)
+            || (caption.contains("Server") && (20348..26100).contains(&build_num))
         {
             (
                 PlatformDistribution::WindowsServer2022,
-                "10.0.20348".to_string(),
+                format!("10.0.{build_str}"),
             )
         } else if caption.contains("Windows 11") || build_num >= 22000 {
             (PlatformDistribution::Windows11, format!("10.0.{build_str}"))
@@ -218,12 +218,13 @@ impl<FS: FileSystem + Send + Sync, CR: CommandRunner + Send + Sync> PlatformBack
                     .is_some_and(|b| b >= 22000)
             }
             PlatformDistribution::WindowsServer2022 => {
-                // Windows Server 2022: build 20348
+                // Windows Server 2022: build >= 20348
                 self.info
                     .version
                     .build
                     .as_deref()
-                    .is_some_and(|b| b == "20348")
+                    .and_then(|b| b.parse::<u64>().ok())
+                    .is_some_and(|b| b >= 20348)
             }
             PlatformDistribution::WindowsServer2025 => {
                 // Windows Server 2025: build >= 26100

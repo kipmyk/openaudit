@@ -4,6 +4,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -165,6 +166,7 @@ impl TestPki {
         let server_key_pem = server_key.serialize_pem();
         let server_key_path = temp_dir.join("server.key");
         fs::write(&server_key_path, &server_key_pem).unwrap();
+        #[cfg(unix)]
         fs::set_permissions(&server_key_path, fs::Permissions::from_mode(0o600)).unwrap();
 
         Self {
@@ -437,23 +439,26 @@ fn test_rejection_of_untrusted_root_certificate() {
 fn test_rejection_of_insecure_private_key_permissions() {
     let pki = TestPki::generate("localhost");
 
-    // Overwrite permissions to insecure 0644
-    fs::set_permissions(&pki.server_key_path, fs::Permissions::from_mode(0o644)).unwrap();
+    #[cfg(unix)]
+    {
+        // Overwrite permissions to insecure 0644
+        fs::set_permissions(&pki.server_key_path, fs::Permissions::from_mode(0o644)).unwrap();
 
-    let res = load_private_key_from_file(&pki.server_key_path);
-    assert!(
-        res.is_err(),
-        "insecure private key (mode 0644) must fail closed"
-    );
+        let res = load_private_key_from_file(&pki.server_key_path);
+        assert!(
+            res.is_err(),
+            "insecure private key (mode 0644) must fail closed"
+        );
 
-    let err_msg = res.err().unwrap().to_string();
-    assert!(
-        err_msg.contains("insecure permissions"),
-        "error must indicate permissions violation: {err_msg}"
-    );
+        let err_msg = res.err().unwrap().to_string();
+        assert!(
+            err_msg.contains("insecure permissions"),
+            "error must indicate permissions violation: {err_msg}"
+        );
 
-    // Restore 0600
-    fs::set_permissions(&pki.server_key_path, fs::Permissions::from_mode(0o600)).unwrap();
+        // Restore 0600
+        fs::set_permissions(&pki.server_key_path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
     assert!(load_private_key_from_file(&pki.server_key_path).is_ok());
 }
 
@@ -463,34 +468,39 @@ fn test_rejection_of_insecure_private_key_permissions() {
 #[test]
 fn test_rejection_of_symlink_private_key_and_cert() {
     let pki = TestPki::generate("localhost");
-    let temp_dir = std::env::temp_dir().join(format!("oa_tls_sym_{}", std::process::id()));
-    fs::create_dir_all(&temp_dir).unwrap();
+    #[cfg(unix)]
+    {
+        let temp_dir = std::env::temp_dir().join(format!("oa_tls_sym_{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
 
-    let symlink_key = temp_dir.join("sym_key.pem");
-    let symlink_cert = temp_dir.join("sym_cert.pem");
+        let symlink_key = temp_dir.join("sym_key.pem");
+        let symlink_cert = temp_dir.join("sym_cert.pem");
 
-    std::os::unix::fs::symlink(&pki.server_key_path, &symlink_key).unwrap();
-    std::os::unix::fs::symlink(&pki.server_cert_path, &symlink_cert).unwrap();
+        std::os::unix::fs::symlink(&pki.server_key_path, &symlink_key).unwrap();
+        std::os::unix::fs::symlink(&pki.server_cert_path, &symlink_cert).unwrap();
 
-    let key_err = load_private_key_from_file(&symlink_key)
-        .err()
-        .unwrap()
-        .to_string();
-    assert!(
-        key_err.contains("is not a regular file"),
-        "symlink key must be rejected: {key_err}"
-    );
+        let key_err = load_private_key_from_file(&symlink_key)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            key_err.contains("is not a regular file"),
+            "symlink key must be rejected: {key_err}"
+        );
 
-    let cert_err = load_certificates_from_file(&symlink_cert)
-        .err()
-        .unwrap()
-        .to_string();
-    assert!(
-        cert_err.contains("is not a regular file"),
-        "symlink cert must be rejected: {cert_err}"
-    );
+        let cert_err = load_certificates_from_file(&symlink_cert)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            cert_err.contains("is not a regular file"),
+            "symlink cert must be rejected: {cert_err}"
+        );
 
-    let _ = fs::remove_dir_all(&temp_dir);
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+    #[cfg(not(unix))]
+    let _ = &pki;
 }
 
 // -----------------------------------------------------------------------------
@@ -611,6 +621,7 @@ fn test_cross_binary_tls13_enrollment_and_retrieval() {
     let agent_secret = agent_state.join("tpm-auth.secret");
     let secret_file = server_data.join("tpm-auth.secret");
     fs::copy(&agent_secret, &secret_file).unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&secret_file, fs::Permissions::from_mode(0o600)).unwrap();
 
     // 3. Issue single-use enrollment token bound to machine_id
@@ -793,6 +804,7 @@ fn test_replay_protection_over_tls_transport() {
     let agent_secret = agent_state.join("tpm-auth.secret");
     let secret_file = server_data.join("tpm-auth.secret");
     fs::copy(&agent_secret, &secret_file).unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&secret_file, fs::Permissions::from_mode(0o600)).unwrap();
 
     // Issue token and enroll
@@ -1009,6 +1021,7 @@ fn test_cross_binary_complete_tls13_lifecycle_with_restart() {
     let agent_secret = agent_state.join("tpm-auth.secret");
     let server_secret = server_data.join("tpm-auth.secret");
     fs::copy(&agent_secret, &server_secret).unwrap();
+    #[cfg(unix)]
     fs::set_permissions(&server_secret, fs::Permissions::from_mode(0o600)).unwrap();
 
     let mut server_child = Command::new(&server_bin)

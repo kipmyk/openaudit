@@ -23,7 +23,20 @@ echo " OpenAudit M3.2 Multi-Distribution Verification Suite"
 echo "================================================================================"
 echo ""
 
-# 1. Verify Docker image store preservation
+# 1. Ensure Docker CI images exist (reuse preserved local images if present)
+if ! docker image inspect "openaudit-ci:ubuntu-24.04" >/dev/null 2>&1; then
+    echo "[*] Building openaudit-ci:ubuntu-24.04..."
+    docker build -f "${WORKSPACE_ROOT}/docker/ci.Dockerfile" -t "openaudit-ci:ubuntu-24.04" "${WORKSPACE_ROOT}"
+fi
+if ! docker image inspect "openaudit-ci:debian-12" >/dev/null 2>&1; then
+    echo "[*] Building openaudit-ci:debian-12..."
+    docker build -f "${WORKSPACE_ROOT}/docker/debian-12.Dockerfile" -t "openaudit-ci:debian-12" "${WORKSPACE_ROOT}"
+fi
+if ! docker image inspect "openaudit-ci:debian-13" >/dev/null 2>&1; then
+    echo "[*] Building openaudit-ci:debian-13..."
+    docker build -f "${WORKSPACE_ROOT}/docker/debian-13.Dockerfile" -t "openaudit-ci:debian-13" "${WORKSPACE_ROOT}"
+fi
+
 echo "[*] Checking preserved local Docker images..."
 docker images "openaudit-ci*" --format "table {{.Repository}}:{{.Tag}}\t{{.ID}}\t{{.Size}}"
 

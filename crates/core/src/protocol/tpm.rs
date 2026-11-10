@@ -4,7 +4,9 @@
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -103,47 +105,59 @@ impl UnixSocketTransport {
 
 impl TpmTransport for UnixSocketTransport {
     fn transceive(&mut self, command: &[u8]) -> Result<Vec<u8>, ProtocolError> {
-        let mut stream = UnixStream::connect(&self.path).map_err(|err| {
-            ProtocolError::TpmError(format!(
-                "failed to connect to TPM socket at '{}': {err}",
-                self.path.display()
-            ))
-        })?;
-        let _ = stream.set_read_timeout(Some(self.timeout));
-        let _ = stream.set_write_timeout(Some(self.timeout));
-
-        stream
-            .write_all(command)
-            .map_err(|err| ProtocolError::TpmError(format!("TPM socket write failed: {err}")))?;
-
-        // Read 10-byte TPM response header
-        let mut header = [0u8; 10];
-        stream.read_exact(&mut header).map_err(|err| {
-            ProtocolError::TpmError(format!("TPM socket header read failed: {err}"))
-        })?;
-
-        let size_bytes: [u8; 4] = header[2..6]
-            .try_into()
-            .map_err(|_| ProtocolError::TpmError("failed to extract size bytes".to_string()))?;
-        let total_size = u32::from_be_bytes(size_bytes) as usize;
-        if total_size < 10 {
-            return Err(ProtocolError::TpmError(format!(
-                "invalid TPM response frame size: {total_size} bytes (minimum 10)"
-            )));
-        }
-
-        let mut response = Vec::with_capacity(total_size);
-        response.extend_from_slice(&header);
-        let remaining = total_size - 10;
-        if remaining > 0 {
-            let mut body = vec![0u8; remaining];
-            stream.read_exact(&mut body).map_err(|err| {
-                ProtocolError::TpmError(format!("TPM socket body read failed: {err}"))
+        #[cfg(unix)]
+        {
+            let mut stream = UnixStream::connect(&self.path).map_err(|err| {
+                ProtocolError::TpmError(format!(
+                    "failed to connect to TPM socket at '{}': {err}",
+                    self.path.display()
+                ))
             })?;
-            response.extend_from_slice(&body);
-        }
+            let _ = stream.set_read_timeout(Some(self.timeout));
+            let _ = stream.set_write_timeout(Some(self.timeout));
 
-        Ok(response)
+            stream.write_all(command).map_err(|err| {
+                ProtocolError::TpmError(format!("TPM socket write failed: {err}"))
+            })?;
+
+            // Read 10-byte TPM response header
+            let mut header = [0u8; 10];
+            stream.read_exact(&mut header).map_err(|err| {
+                ProtocolError::TpmError(format!("TPM socket header read failed: {err}"))
+            })?;
+
+            let size_bytes: [u8; 4] = header[2..6]
+                .try_into()
+                .map_err(|_| ProtocolError::TpmError("failed to extract size bytes".to_string()))?;
+            let total_size = u32::from_be_bytes(size_bytes) as usize;
+            if total_size < 10 {
+                return Err(ProtocolError::TpmError(format!(
+                    "invalid TPM response frame size: {total_size} bytes (minimum 10)"
+                )));
+            }
+
+            let mut response = Vec::with_capacity(total_size);
+            response.extend_from_slice(&header);
+            let remaining = total_size - 10;
+            if remaining > 0 {
+                let mut body = vec![0u8; remaining];
+                stream.read_exact(&mut body).map_err(|err| {
+                    ProtocolError::TpmError(format!("TPM socket body read failed: {err}"))
+                })?;
+                response.extend_from_slice(&body);
+            }
+
+            Ok(response)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = command;
+            let _ = self.timeout;
+            Err(ProtocolError::TpmError(format!(
+                "failed to connect to TPM socket at '{}': Unix domain sockets unsupported on this platform",
+                self.path.display()
+            )))
+        }
     }
 }
 
@@ -250,6 +264,9 @@ impl DeviceTransport {
                 )));
             }
         }
+
+        #[cfg(not(unix))]
+        let _ = &meta;
 
         Ok(())
     }
@@ -1244,6 +1261,7 @@ impl<T: TpmTransport> TpmProvisioningManager<T> {
             .map_err(|err| {
                 ProtocolError::StorageUnavailable(format!("failed to write secret file: {err}"))
             })?;
+        #[cfg(unix)]
         sf.set_permissions(std::fs::Permissions::from_mode(0o600))
             .map_err(|err| {
                 ProtocolError::StorageUnavailable(format!("failed to chmod secret file: {err}"))
@@ -1584,9 +1602,11 @@ mod tests {
         assert!(secret_file.is_file());
         assert!(lc_file.is_file());
 
-        let sf_meta = std::fs::metadata(&secret_file).unwrap();
         #[cfg(unix)]
-        assert_eq!(sf_meta.permissions().mode() & 0o777, 0o600);
+        {
+            let sf_meta = std::fs::metadata(&secret_file).unwrap();
+            assert_eq!(sf_meta.permissions().mode() & 0o777, 0o600);
+        }
 
         // Verify NV attributes
         let mut client = harness.connect_client();

@@ -75,6 +75,8 @@ fn test_device_transport_rejects_regular_file() {
             "error must explain non-character device rejection: {err}"
         );
     }
+    #[cfg(not(unix))]
+    let _ = res;
 }
 
 #[test]
@@ -99,6 +101,8 @@ fn test_device_transport_rejects_directory() {
             "error must explain directory rejection: {err}"
         );
     }
+    #[cfg(not(unix))]
+    let _ = res;
 }
 
 #[test]

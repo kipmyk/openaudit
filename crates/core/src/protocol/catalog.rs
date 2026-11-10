@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[cfg(unix)]
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -281,6 +282,7 @@ pub enum CrashPoint {
 
 /// Queries whether a process with `pid` is currently alive in the operating system.
 #[must_use]
+#[allow(clippy::missing_const_for_fn)]
 pub fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
@@ -292,6 +294,8 @@ pub fn is_process_alive(pid: u32) -> bool {
             return status.success();
         }
     }
+    #[cfg(not(unix))]
+    let _ = pid;
     false
 }
 
@@ -849,6 +853,11 @@ impl CatalogManager {
     }
 
     /// Issues directory-level `fsync` to guarantee directory entry persistence.
+    #[allow(
+        clippy::unused_self,
+        clippy::missing_const_for_fn,
+        clippy::unnecessary_wraps
+    )]
     fn sync_dir(&self) -> Result<(), ProtocolError> {
         #[cfg(unix)]
         {
@@ -966,38 +975,58 @@ impl CatalogManager {
             let _ = lock_file.set_permissions(fs::Permissions::from_mode(0o600));
         }
 
-        // Apply non-blocking kernel advisory lock via flock
-        match flock(&lock_file, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => {
-                // Kernel lock successfully acquired! We are the sole process owner.
-                let meta = LockMetadata {
-                    pid: std::process::id(),
-                    lock_uuid: uuid::Uuid::new_v4().to_string(),
-                    acquired_at_nanos: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
-                };
-                let _ = Self::write_lock_metadata(&lock_file, &meta);
+        #[cfg(unix)]
+        {
+            // Apply non-blocking kernel advisory lock via flock
+            match flock(&lock_file, FlockOperation::NonBlockingLockExclusive) {
+                Ok(()) => {
+                    // Kernel lock successfully acquired! We are the sole process owner.
+                    let meta = LockMetadata {
+                        pid: std::process::id(),
+                        lock_uuid: uuid::Uuid::new_v4().to_string(),
+                        acquired_at_nanos: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+                    };
+                    let _ = Self::write_lock_metadata(&lock_file, &meta);
 
-                Ok(FileLockGuard {
-                    _thread_guard: thread_lock,
-                    file: lock_file,
-                    lock_path: self.lock_path.clone(),
-                })
-            }
-            Err(err) if err == rustix::io::Errno::WOULDBLOCK || err == rustix::io::Errno::AGAIN => {
-                // Another process holds the kernel lock. Inspect its metadata to report owner.
-                let owner_info = Self::read_lock_metadata(&lock_file).map_or_else(
-                    || "unknown active process".to_string(),
-                    |m| format!("PID {}", m.pid),
-                );
+                    Ok(FileLockGuard {
+                        _thread_guard: thread_lock,
+                        file: lock_file,
+                        lock_path: self.lock_path.clone(),
+                    })
+                }
+                Err(err)
+                    if err == rustix::io::Errno::WOULDBLOCK || err == rustix::io::Errno::AGAIN =>
+                {
+                    // Another process holds the kernel lock. Inspect its metadata to report owner.
+                    let owner_info = Self::read_lock_metadata(&lock_file).map_or_else(
+                        || "unknown active process".to_string(),
+                        |m| format!("PID {}", m.pid),
+                    );
 
-                Err(ProtocolError::StorageUnavailable(format!(
-                    "catalog is locked by active process ({owner_info}): cannot acquire exclusive lock"
-                )))
+                    Err(ProtocolError::StorageUnavailable(format!(
+                        "catalog is locked by active process ({owner_info}): cannot acquire exclusive lock"
+                    )))
+                }
+                Err(err) => Err(ProtocolError::StorageUnavailable(format!(
+                    "kernel flock failed on '{}': {err}",
+                    self.lock_path.display()
+                ))),
             }
-            Err(err) => Err(ProtocolError::StorageUnavailable(format!(
-                "kernel flock failed on '{}': {err}",
-                self.lock_path.display()
-            ))),
+        }
+        #[cfg(not(unix))]
+        {
+            let meta = LockMetadata {
+                pid: std::process::id(),
+                lock_uuid: uuid::Uuid::new_v4().to_string(),
+                acquired_at_nanos: chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+            };
+            let _ = Self::write_lock_metadata(&lock_file, &meta);
+
+            Ok(FileLockGuard {
+                _thread_guard: thread_lock,
+                file: lock_file,
+                lock_path: self.lock_path.clone(),
+            })
         }
     }
 
@@ -1051,7 +1080,10 @@ impl fmt::Debug for FileLockGuard<'_> {
 
 impl Drop for FileLockGuard<'_> {
     fn drop(&mut self) {
+        #[cfg(unix)]
         let _ = flock(&self.file, FlockOperation::Unlock);
+        #[cfg(not(unix))]
+        let _ = &self.file;
     }
 }
 
@@ -1072,7 +1104,9 @@ fn hex_digest(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(unix)]
     use std::io::{BufRead, BufReader};
+    #[cfg(unix)]
     use std::process::{Command, Stdio};
     use std::thread;
     use tempfile::tempdir;
@@ -1094,6 +1128,7 @@ mod tests {
     // Child Process Worker Entry Point (used for separate OS process testing)
     // =========================================================================
 
+    #[cfg(unix)]
     #[test]
     fn test_child_process_worker_entry_point() {
         let Ok(mode) = std::env::var("OPENAUDIT_CHILD_MODE") else {
@@ -1153,6 +1188,7 @@ mod tests {
         std::process::exit(0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_cross_process_live_owner_cannot_have_lock_stolen() {
         let dir = tempdir().unwrap();
@@ -1205,6 +1241,7 @@ mod tests {
         let _ = child.wait();
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_cross_process_dead_owner_does_not_block_recovery() {
         let dir = tempdir().unwrap();
@@ -1260,6 +1297,7 @@ mod tests {
         assert_eq!(active.counter, 10);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_cross_process_writer_mutual_exclusion() {
         let dir = tempdir().unwrap();
@@ -1302,6 +1340,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_cross_process_child_killed_during_transaction_is_recoverable() {
         let dir = tempdir().unwrap();

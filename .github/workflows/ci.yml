@@ -81,8 +81,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Build Debian 12 and 13 verification containers
+      - name: Build Ubuntu 24.04, Debian 12 and 13 verification containers
         run: |
+          docker build -f docker/ci.Dockerfile -t openaudit-ci:ubuntu-24.04 .
           docker build -f docker/debian-12.Dockerfile -t openaudit-ci:debian-12 .
           docker build -f docker/debian-13.Dockerfile -t openaudit-ci:debian-13 .
 
