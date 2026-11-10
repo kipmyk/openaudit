@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/kipmyk/openaudit/actions/workflows/ci.yml/badge.svg)](https://github.com/kipmyk/openaudit/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Status: Pre-Alpha](https://img.shields.io/badge/Status-Pre--Alpha_(v0.2.0--m2)-orange.svg)](#current-status)
+[![Status: Public Alpha](https://img.shields.io/badge/Status-Public_Alpha_(v0.1.0--alpha.0)-blue.svg)](#current-status)
 
 ---
 
@@ -30,34 +30,32 @@ OpenAudit gives organizations complete ownership of their security data and the 
 
 ## 3. Current Status
 
-> **Current Status: Pre-Alpha (M3 In Progress)**<br>
-> **Latest Completed Release:** [`v0.2.0-m2`](https://github.com/kipmyk/openaudit/releases/tag/v0.2.0-m2) (Milestone M2: Linux Auditing Engine).<br>
-> The M2 local host auditing CLI evaluates 20 built-in security rules across 55 verified empirical lab scenarios with 100% precision and recall on Ubuntu 24.04 LTS.
+> **Current Status: Public Alpha (`v0.1.0-alpha.0`)**<br>
+> **Milestone Baseline:** [`v0.2.0-m2`](https://github.com/kipmyk/openaudit/releases/tag/v0.2.0-m2) (Milestone M2: Linux Auditing Engine).<br>
+> **Active Target Release:** `v0.1.0-alpha.0` (Milestone M8: Public Alpha Prerelease).
 
-| Milestone | Scope | Status |
-|---|---|---|
-| **M0: Foundation** | Project architecture, threat modeling, workspace foundation, CI | **Completed** |
-| **M1: Core Domain** | Domain models (Asset, Scan, Finding, Severity, Evidence), error types | **Completed** |
-| **M2: Linux Auditing Engine** | Local host audit (Ubuntu/Debian) via standalone CLI (`v0.2.0-m2`) | **Completed (55 Lab Scenarios, 100% Precision/Recall)** |
-| **M3: Cross-Platform & Validation** | Core platform abstraction, multi-distribution validation, Windows/macOS support, cross-platform testing, and security foundations for distributed auditing | **In Progress** |
-| **M4: Agentless Perimeter Auditing** | DNS, TLS, and HTTP security posture checks with SSRF defenses | Planned |
-| **M5: Control Plane & Persistence** | Axum HTTP API, PostgreSQL persistence, transactional scheduling | Planned |
-| **M6: Agent Communication** | Outbound agent polling, identity management, secure enrollment | Planned |
-| **M7: Reporting & Lifecycle** | Finding lifecycle, diff tracking, evidence export (JSON/HTML) | Planned |
-| **M8: Public Alpha** | End-to-end verified release and documented deployment | Planned |
+| Milestone | Scope | Status | Evidence / Baseline |
+|---|---|---|---|
+| **M0: Foundation** | Project architecture, threat modeling, workspace foundation, CI | **Completed** | Clean workspace, pinned toolchain |
+| **M1: Core Domain** | Domain models (Asset, Scan, Finding, Severity, Evidence), error types | **Completed** | Full typed domain invariants |
+| **M2: Linux Auditing Engine** | Local host audit (Ubuntu/Debian) via standalone CLI (`v0.2.0-m2`) | **Completed** | 55 Lab Scenarios, 100% Precision/Recall |
+| **M3: Cross-Platform & Desktop GUI** | Platform abstraction (Linux, macOS, Windows), GUI application (`OpenAudit.app`), packaging scripts | **Completed with Qualifications** | Commit `f9a8bd5`, 43 rules, packaging verified |
+| **M4: Agentless Perimeter Auditing** | DNS, TLS certificate inspection, and HTTP posture checks with SSRF defenses | **Completed** | 57 network integration tests |
+| **M5: Control Plane & Persistence** | Axum HTTP API, SQLite & PostgreSQL persistence, RBAC, scheduler | **Completed** | Full CRUD, tenant isolation, live Postgres |
+| **M6: Agent Communication** | Outbound agent polling, secure enrollment, job claiming, rotation fallback | **Completed** | Shared-secret proof-of-possession, 15m grace |
+| **M7: Finding Lifecycle & Posture** | Finding state machine, occurrence counter, diff comparison engine, posture metrics | **Completed** | Verified remediations vs unverified omissions |
+| **M8: Public Alpha Acceptance** | Self-hosted operator E2E workflow, restart persistence, Docker compose, web UI | **Completed** | Commit `9b09d2e`, 382 passing workspace tests |
 
-### Milestone M3 & D4 Status Note
+### Documented Environmental Qualifications & Release Boundaries
 
-Milestone M3 is actively in progress. As part of M3, the **D4 Deliverable (Subject-Bound Remote Authority & Agent Attestation)** represents a cross-cutting security foundation providing TPM 2.0 hardware identity binding, crash-resilient catalog distribution, replay-protected token authorization, and pure TLS 1.3 transport.
+OpenAudit maintains an honest, verifiable engineering standard. The following boundary conditions apply to the `v0.1.0-alpha.0` Public Alpha:
 
-- **D4 Acceptance Status:** **Accepted with Qualifications**.
-- **Software Implementation & Emulator Verification:** Fully implemented and validated across automated workspace tests, including complete 10-step cross-binary server/agent TLS 1.3 enrollment and catalog retrieval workflows against software TPM 2.0 emulation (`swtpm`).
-- **Outstanding Qualifications (Hardware & External Audit):**
-  1. *Physical TPM 2.0 Hardware Qualification:* Validated against `swtpm` emulation; qualification on physical discrete/firmware TPM hardware (`/dev/tpmrm0`) remains pending execution on physical Linux hardware using `scripts/qualify_physical_tpm.sh`. Emulator testing does not constitute physical TPM hardware qualification.
-  2. *Controlled Physical Power-Loss Bench Testing:* Validated via software crash-recovery matrices (CB-01..13) and atomic WAL rollback testing; qualification on physical hardware with abrupt relay bench power severance remains pending execution using `scripts/qualify_power_loss.sh`.
-  3. *Independent External Security Assessment:* Internal threat models, cryptographic bounds, and security review handoff procedures are summarized in `docs/M3-D4-FINAL-ACCEPTANCE-REPORT.md` and `docs/THREAT-MODEL.md`; independent third-party penetration testing and formal code audit remain pending external review.
-
-Completion of the D4 security workstream does not constitute full M3 acceptance. Milestone M3 remains open until all original cross-platform abstraction and multi-distribution validation criteria (Linux, macOS, Windows) are satisfied.
+1. **Linux Architecture Qualification:** Standalone packages (`.deb`, `.tar.gz`) are verified in clean containers on **ARM64 / aarch64** against `glibc >= 2.34` (Ubuntu 24.04 LTS, Debian 12 Bookworm, Debian 13 Trixie). Linux `x86_64` / `amd64` packages require verification on native x86_64 runners.
+2. **macOS Code Signing & Notarization:** Native desktop GUI (`OpenAudit.app`) is ad-hoc signed and verified running on Apple Silicon (macOS Sonoma 14 / Sequoia 15). External distribution without Gatekeeper quarantine requires Developer ID signing and Apple notarization. Intel x86_64 macOS is unverified.
+3. **Windows Native CI Status:** Native Windows 11 and Windows Server 2022/2025 collectors, registry rules, and PowerShell service installers are implemented and mock-tested; native hardware CI execution is configured in GitHub Actions and runs upon branch push.
+4. **Agent Trust Model:** Fleet agents authenticate via shared-secret proof-of-possession over server-authenticated HTTPS / TLS 1.3 with a bounded 15-minute credential rotation grace period (not mutual TLS or asymmetric hardware identity).
+5. **Distributed Coordination:** Rate limiting and recurring job scheduling are qualified for single-instance control planes. Distributed multi-instance clustering requires shared PostgreSQL/Redis state locking.
+6. **Hardware Attestation (D4 Foundation):** Software TPM 2.0 (`swtpm`) emulation and software crash-recovery matrices (CB-01..13) are verified in CI. Physical discrete TPM 2.0 (`scripts/qualify_physical_tpm.sh`), relay power-loss bench testing (`scripts/qualify_power_loss.sh`), and external security audits remain pending external hardware qualification.
 
 ---
 
@@ -90,15 +88,17 @@ OpenAudit follows a modular workspace architecture implemented in Rust:
 ```text
 openaudit/
 ├── apps/
-│   ├── openaudit-server/   # Control plane: Axum API, Postgres storage & task scheduling
-│   ├── openaudit-cli/      # Operator CLI: local host audits & control plane client
-│   └── openaudit-agent/    # Minimal outbound-only inspection daemon
+│   ├── openaudit-server/   # Control plane: Axum API, SQLite & Postgres storage, scheduler, web UI
+│   ├── openaudit-cli/      # Operator CLI: local host audits & network perimeter scanner
+│   ├── openaudit-agent/    # Minimal outbound-only inspection daemon
+│   └── openaudit-desktop/  # Native macOS desktop GUI application
 │
 ├── crates/
 │   ├── openaudit-core/     # Domain models: Asset, Scan, Finding, Severity, Evidence
-│   └── openaudit-engine/   # Rule engine and check runners (Linux host, DNS/TLS checks)
+│   ├── openaudit-engine/   # Rule engine and collectors (Linux, macOS, Windows)
+│   └── openaudit-network/  # Network perimeter engine: DNS, TLS, HTTP, SSRF defense
 │
-├── docs/                   # Architecture, Threat Model, Research, and Roadmap
+├── docs/                   # Architecture, Threat Model, Packaging, and Roadmap
 ├── .github/workflows/      # Automated CI pipelines
 ├── Cargo.toml              # Cargo workspace manifest
 ├── rust-toolchain.toml     # Pinned stable toolchain
@@ -106,20 +106,22 @@ openaudit/
 └── README.md
 ```
 
-### Planned Auditing Capabilities
+### Auditing Capabilities
 
-OpenAudit is designed to support two complementary inspection approaches:
+OpenAudit supports three complementary inspection approaches:
 
-#### A. Agent-Based Host Inspection (Planned)
-An optional, minimal Rust daemon installed on authorized servers:
-- **Operating System Targets:** Ubuntu, Debian, Rocky Linux.
-- **Inspection Targets:** Kernel version, installed packages, security updates, active systemd services, open listening ports, SSH daemon configuration, firewall state (UFW/iptables/nftables), file permissions on sensitive paths, and container daemon configurations.
-- **Security Boundaries:** Outbound-only HTTPS polling (zero listening ports on the agent), read-only inspection, no remote shell execution capability, and cryptographically revocable credentials.
+#### A. Local Host Posture Inspection
+In-process evaluation of local operating system controls, users, services, and kernel configuration:
+- **Operating System Targets:** Linux (Ubuntu 24.04, Debian 12/13), macOS (Sonoma, Sequoia), and Windows (11, Server 2022/2025).
+- **Inspection Targets:** Kernel sysctls, SSH hardening, firewall state (UFW/nftables/iptables/Windows Defender), sensitive file permissions, SUID/SGID binaries, service accounts, and open listening ports.
 
-#### B. Agentless Perimeter Inspection (Planned)
-Inspection of authorized external infrastructure without software installation:
-- **Inspection Targets:** DNS record hygiene (SPF, DKIM, DMARC, DNSSEC), HTTP/HTTPS availability, TLS configuration and certificate validity, HTTP security headers (HSTS, CSP, X-Frame-Options), and exposed administrative interfaces.
-- **SSRF Defenses:** Blocklist for private, loopback, link-local, and cloud metadata IP ranges by default; administrator-controlled allowlists for authorized internal networks; post-resolution socket-level IP binding to prevent DNS rebinding; and re-validation on all HTTP redirects.
+#### B. Agentless Perimeter Inspection
+Non-destructive evaluation of observable services, open ports, TLS posture, and HTTP headers without software installation:
+- **Inspection Targets:** DNS record hygiene, port & service identification, TLS certificate validation (expiration, self-signed, hostname mismatch), and HTTP security headers (HSTS, CSP, X-Frame-Options, cookie security attributes).
+- **SSRF Defenses:** Unconditional blocking of cloud metadata (169.254.169.254), strict CIDR parsing, post-resolution pinned IP binding against DNS rebinding, and re-validation on all redirects.
+
+#### C. Centralized Self-Hosted Fleet & Finding Management
+Self-hosted server with embedded operator web interface, outbound agent polling, stable finding fingerprinting, triage tracking, verified remediation diffing, and export formats (HTML, CSV, JSON).
 
 ---
 
@@ -129,24 +131,24 @@ OpenAudit is distributed as **self-contained production packages** that require 
 
 ### Installation Options
 
-#### Linux (Debian / Ubuntu Native Package)
-Download the `.deb` package and install via `dpkg`:
+#### Linux (Debian / Ubuntu Native Package — ARM64 Qualified)
+Download the `.deb` package and install via `dpkg` (ARM64 verified on Ubuntu 24.04 / Debian 12 / Debian 13 with `glibc >= 2.34`; `amd64` builds require x86_64 CI runner):
 ```bash
-sudo dpkg -i openaudit_0.1.0-alpha.0_amd64.deb    # or _arm64.deb
+sudo dpkg -i openaudit_0.1.0-alpha.0_arm64.deb
 openaudit version
 openaudit scan --profile baseline
 ```
 
-#### Linux / macOS (Portable Archive)
+#### Linux / macOS (Portable Archive — ARM64 Qualified)
 Extract the `.tar.gz` archive to any directory or `/usr/local`:
 ```bash
-tar -xzf openaudit-0.1.0-alpha.0-linux-x86_64.tar.gz
+tar -xzf openaudit-0.1.0-alpha.0-linux-aarch64.tar.gz   # or -darwin-aarch64.tar.gz
 ./openaudit scan --format human
 ./openaudit report --format html --output report.html
 ```
 
-#### Windows (Portable Distribution)
-Extract `openaudit-0.1.0-alpha.0-windows-x86_64.zip` in PowerShell:
+#### Windows (Portable Distribution — Pending Native CI Runner)
+Once generated by the GitHub Actions Windows runner, extract `openaudit-0.1.0-alpha.0-windows-x86_64.zip` in PowerShell:
 ```powershell
 Expand-Archive openaudit-0.1.0-alpha.0-windows-x86_64.zip -DestinationPath "C:\OpenAudit"
 cd C:\OpenAudit\bin
