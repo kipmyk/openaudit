@@ -20,7 +20,7 @@ pub enum IpClassification {
     Loopback,
     /// Non-metadata link-local address (169.254.0.0/16 or fe80::/10).
     LinkLocal,
-    /// Cloud instance metadata endpoint (169.254.169.254, [fd00:ec2::254]).
+    /// Cloud instance metadata endpoint (`169.254.169.254`, `[fd00:ec2::254]`).
     CloudMetadata,
     /// Reserved or special-use address (CGNAT 100.64.0.0/10, documentation RFC 5737, multicast, broadcast).
     SpecialUseOrReserved,

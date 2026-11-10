@@ -35,8 +35,7 @@ fn resolve_postgres_config() -> (String, bool) {
         }
     }
     let require_pg = env::var("OPENAUDIT_REQUIRE_POSTGRES_TESTS")
-        .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"))
-        .unwrap_or(false);
+        .is_ok_and(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"));
     (
         "postgres://postgres:postgres@127.0.0.1:5433/openaudit_test".to_string(),
         require_pg,

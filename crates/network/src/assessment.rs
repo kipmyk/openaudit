@@ -77,7 +77,7 @@ pub struct UnifiedNetworkFinding {
     pub category: String,
     /// Short human-readable title.
     pub title: String,
-    /// Affected endpoint (e.g. "https://example.com:443/").
+    /// Affected endpoint (e.g. `"https://example.com:443/"`).
     pub endpoint: String,
     /// Concrete evidence observed on the network.
     pub evidence: String,
