@@ -84,7 +84,7 @@ fn test_cli_runs_headlessly_without_display_environment() {
         .run_audit_with_profile(org_id, AuditProfile::Baseline)
         .expect("Headless audit must execute cleanly without display environment");
 
-    assert!(!report.asset.name.is_empty());
+    assert_ne!(report.asset.name, "");
     assert!(report.duration_ms > 0);
 
     // Verify hardened profile execution in pure headless mode
@@ -92,7 +92,7 @@ fn test_cli_runs_headlessly_without_display_environment() {
         .run_audit_with_profile(org_id, AuditProfile::Hardened)
         .expect("Hardened audit must execute cleanly in headless environment");
 
-    assert!(!hardened_report.asset.name.is_empty());
+    assert_ne!(hardened_report.asset.name, "");
 }
 
 /// Verifies that the CLI's HTML report generator produces a self-contained, standalone
@@ -107,7 +107,7 @@ fn test_cli_html_report_is_self_contained_and_headless() {
 
     // Serialize report to JSON
     let json_bytes = serde_json::to_vec(&report).expect("Audit report must serialize to JSON");
-    assert!(!json_bytes.is_empty());
+    assert_ne!(json_bytes.len(), 0);
 
     // Verify JSON round-trip deserialization without UI runtime
     let deserialized: openaudit_engine::AuditReport =
@@ -159,9 +159,28 @@ fn test_server_auditing_rule_coverage_and_invariants() {
 /// - On macOS: exactly 32 rules are marked `UnsupportedPlatform` (20 Linux + 12 Windows).
 /// - On macOS Baseline: 9 executed + 2 profile-excluded + 32 unsupported = 43 total.
 /// - On macOS Hardened: 11 executed + 0 profile-excluded + 32 unsupported = 43 total.
+/// - On Linux Baseline: 20 executed + 0 profile-excluded + 23 unsupported = 43 total.
+/// - On Linux Hardened: 20 executed + 0 profile-excluded + 23 unsupported = 43 total.
+/// - On Windows Baseline: 11 executed + 1 profile-excluded + 31 unsupported = 43 total.
+/// - On Windows Hardened: 12 executed + 0 profile-excluded + 31 unsupported = 43 total.
 #[test]
 fn test_audit_rule_accounting_exact_counts_and_invariants() {
     use openaudit_engine::CheckExecutionStatus;
+
+    let (
+        expected_unsupported,
+        expected_baseline_excluded,
+        expected_baseline_executed,
+        expected_hardened_executed,
+    ) = if cfg!(target_os = "macos") {
+        (32, 2, 9, 11)
+    } else if cfg!(target_os = "linux") {
+        (23, 0, 20, 20)
+    } else if cfg!(target_os = "windows") {
+        (31, 1, 11, 12)
+    } else {
+        panic!("Unsupported OS for rule accounting test");
+    };
 
     let org_id = OrganizationId::from_seed(b"openaudit:rule-accounting:test-org");
     let engine = AuditEngine::default();
@@ -184,8 +203,8 @@ fn test_audit_rule_accounting_exact_counts_and_invariants() {
         .filter(|s| matches!(s.status, CheckExecutionStatus::UnsupportedPlatform { .. }))
         .count();
     assert_eq!(
-        baseline_unsupported, 32,
-        "All 20 Linux and 12 Windows rules must be marked UnsupportedPlatform on macOS"
+        baseline_unsupported, expected_unsupported,
+        "All non-host platform rules must be marked UnsupportedPlatform"
     );
 
     let baseline_excluded = baseline_report
@@ -194,8 +213,8 @@ fn test_audit_rule_accounting_exact_counts_and_invariants() {
         .filter(|s| matches!(s.status, CheckExecutionStatus::NotApplicable { .. }))
         .count();
     assert_eq!(
-        baseline_excluded, 2,
-        "Exactly 2 macOS hardened rules must be excluded under Baseline profile"
+        baseline_excluded, expected_baseline_excluded,
+        "Hardened-only rules must be excluded under Baseline profile"
     );
 
     let baseline_executed = baseline_report
@@ -204,11 +223,11 @@ fn test_audit_rule_accounting_exact_counts_and_invariants() {
         .filter(|s| matches!(s.status, CheckExecutionStatus::Executed { .. }))
         .count();
     assert_eq!(
-        baseline_executed, 9,
-        "Exactly 9 macOS baseline rules must be executed under Baseline profile"
+        baseline_executed, expected_baseline_executed,
+        "Native baseline rules must be executed under Baseline profile"
     );
 
-    // Sum invariant: 32 + 2 + 9 == 43
+    // Sum invariant
     assert_eq!(
         baseline_unsupported + baseline_excluded + baseline_executed,
         43
@@ -226,7 +245,7 @@ fn test_audit_rule_accounting_exact_counts_and_invariants() {
         .iter()
         .filter(|s| matches!(s.status, CheckExecutionStatus::UnsupportedPlatform { .. }))
         .count();
-    assert_eq!(hardened_unsupported, 32);
+    assert_eq!(hardened_unsupported, expected_unsupported);
 
     let hardened_executed = hardened_report
         .check_statuses
@@ -234,10 +253,10 @@ fn test_audit_rule_accounting_exact_counts_and_invariants() {
         .filter(|s| matches!(s.status, CheckExecutionStatus::Executed { .. }))
         .count();
     assert_eq!(
-        hardened_executed, 11,
-        "All 11 macOS native rules must be executed under Hardened profile"
+        hardened_executed, expected_hardened_executed,
+        "All native rules must be executed under Hardened profile"
     );
 
-    // Sum invariant: 32 + 0 + 11 == 43
+    // Sum invariant
     assert_eq!(hardened_unsupported + hardened_executed, 43);
 }
