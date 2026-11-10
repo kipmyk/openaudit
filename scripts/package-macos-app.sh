@@ -8,12 +8,14 @@
 # ==============================================================================
 
 set -euo pipefail
+export COPYFILE_DISABLE=1
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${WORKSPACE_ROOT}/artifacts/packages"
 APP_BUNDLE="${DIST_DIR}/OpenAudit.app"
 VERSION="0.1.0-alpha.0"
+ZIP_NAME="OpenAudit-${VERSION}-macos-aarch64.zip"
 
 echo "================================================================================"
 echo " Packaging OpenAudit macOS Desktop Application (v${VERSION})"
@@ -71,10 +73,9 @@ elif command -v codesign >/dev/null 2>&1; then
 fi
 
 # 6. Create distributable zip archive
-ZIP_NAME="OpenAudit-${VERSION}-macos-aarch64.zip"
 echo "[*] Creating distributable archive: ${ZIP_NAME}..."
 rm -f "${DIST_DIR}/${ZIP_NAME}"
-(cd "${DIST_DIR}" && zip -r -q "${ZIP_NAME}" "OpenAudit.app")
+(cd "${DIST_DIR}" && zip -r -q -X "${ZIP_NAME}" "OpenAudit.app")
 
 # 7. Update SHA256SUMS
 (

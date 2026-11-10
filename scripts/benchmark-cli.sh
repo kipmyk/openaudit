@@ -85,9 +85,9 @@ for i in $(seq 1 "${ITERATIONS}"); do
     # Extract rule metrics from JSON output if successful
     if [ "${EXIT_CODE}" -eq 0 ] && [ -f "${OUT_FILE}" ]; then
         LAST_REGISTERED=$(python3 -c "import json; data=json.load(open('${OUT_FILE}')); print(len(data.get('check_statuses', [])))" 2>/dev/null || echo 0)
-        LAST_EXECUTED=$(python3 -c "import json; data=json.load(open('${OUT_FILE}')); print(sum(1 for s in data.get('check_statuses', []) if 'Executed' in s.get('status', {})))" 2>/dev/null || echo 0)
-        LAST_EXCLUDED=$(python3 -c "import json; data=json.load(open('${OUT_FILE}')); print(sum(1 for s in data.get('check_statuses', []) if 'NotApplicable' in s.get('status', {})))" 2>/dev/null || echo 0)
-        LAST_UNSUPPORTED=$(python3 -c "import json; data=json.load(open('${OUT_FILE}')); print(sum(1 for s in data.get('check_statuses', []) if 'UnsupportedPlatform' in s.get('status', {})))" 2>/dev/null || echo 0)
+        LAST_EXECUTED=$(python3 -c "import json; data=json.load(open('${OUT_FILE}')); print(sum(1 for s in data.get('check_statuses', []) if 'executed' in s.get('status', {}) or 'Executed' in s.get('status', {})))" 2>/dev/null || echo 0)
+        LAST_EXCLUDED=$(python3 -c "import json; data=json.load(open('${OUT_FILE}')); print(sum(1 for s in data.get('check_statuses', []) if 'not_applicable' in s.get('status', {}) or 'NotApplicable' in s.get('status', {})))" 2>/dev/null || echo 0)
+        LAST_UNSUPPORTED=$(python3 -c "import json; data=json.load(open('${OUT_FILE}')); print(sum(1 for s in data.get('check_statuses', []) if 'unsupported_platform' in s.get('status', {}) or 'UnsupportedPlatform' in s.get('status', {})))" 2>/dev/null || echo 0)
     fi
     
     printf "  Run #%d: %4d ms (exit code: %d)\n" "${i}" "${DIFF_MS}" "${EXIT_CODE}"

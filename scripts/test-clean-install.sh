@@ -35,16 +35,25 @@ echo ""
 # Identify package files matching host architecture
 HOST_ARCH="$(uname -m)"
 case "${HOST_ARCH}" in
-    x86_64|amd64) HOST_DEB_ARCH="amd64" ;;
-    aarch64|arm64) HOST_DEB_ARCH="arm64" ;;
-    *) HOST_DEB_ARCH="${HOST_ARCH}" ;;
+    x86_64|amd64)
+        HOST_DEB_ARCH="amd64"
+        HOST_PKG_ARCH="x86_64"
+        ;;
+    aarch64|arm64)
+        HOST_DEB_ARCH="arm64"
+        HOST_PKG_ARCH="aarch64"
+        ;;
+    *)
+        HOST_DEB_ARCH="${HOST_ARCH}"
+        HOST_PKG_ARCH="${HOST_ARCH}"
+        ;;
 esac
 
-DEB_PKG="$(find "${DIST_DIR}" -name "*_${HOST_DEB_ARCH}.deb" | head -n 1)"
+DEB_PKG="$(find "${DIST_DIR}" -name "*_${HOST_DEB_ARCH}.deb" | sed -n '1p')"
 if [ -z "${DEB_PKG}" ]; then
-    DEB_PKG="$(find "${DIST_DIR}" -name "*.deb" | head -n 1)"
+    DEB_PKG="$(find "${DIST_DIR}" -name "*.deb" | sed -n '1p')"
 fi
-TAR_PKG="$(find "${DIST_DIR}" -name "*.tar.gz" | head -n 1)"
+TAR_PKG="$(find "${DIST_DIR}" -name "*.tar.gz" | sed -n '1p')"
 
 if [ -z "${DEB_PKG}" ] || [ ! -f "${DEB_PKG}" ]; then
     echo "[-] Error: .deb package not found in ${DIST_DIR}." >&2
@@ -57,23 +66,21 @@ test_clean_linux() {
     local distro_image="$1"
     local distro_name="$2"
     local deb_file="${3:-${DEB_BASENAME}}"
-    local platform_arg=()
-    if [ -n "${4:-}" ]; then
-        platform_arg=(--platform "$4")
-    fi
+    local target_platform="${4:-linux/${HOST_DEB_ARCH}}"
 
     echo "--------------------------------------------------------------------------------"
-    echo " Testing on Clean Environment: ${distro_name} (${distro_image}) [${deb_file}]"
+    echo " Testing on Clean Environment: ${distro_name} (${distro_image} - ${target_platform}) [${deb_file}]"
     echo "--------------------------------------------------------------------------------"
 
     docker run --rm \
-        "${platform_arg[@]}" \
+        --platform "${target_platform}" \
         -v "${DIST_DIR}:/packages:ro" \
         "${distro_image}" \
         bash -c "
             set -euo pipefail
 
             echo '[1/6] Verifying environment is clean (no dev toolchains)...'
+            ldd --version | sed -n '1p'
             if command -v rustc >/dev/null 2>&1; then echo '[-] ERROR: rustc found!'; exit 1; fi
             if command -v cargo >/dev/null 2>&1; then echo '[-] ERROR: cargo found!'; exit 1; fi
             if command -v node >/dev/null 2>&1; then echo '[-] ERROR: node found!'; exit 1; fi
@@ -117,7 +124,7 @@ test_clean_linux() {
             test ! -e /usr/bin/openaudit-server
             test ! -e /usr/bin/openaudit-agent
 
-            echo '[+] Clean environment verification SUCCEEDED on ${distro_name}!'
+            echo '[+] Clean environment verification SUCCEEDED on ${distro_name} (${target_platform})!'
         "
 }
 
@@ -131,13 +138,18 @@ echo "--------------------------------------------------------------------------
 echo " Testing Clean Execution on macOS Host"
 echo "--------------------------------------------------------------------------------"
 
-MAC_TAR="$(find "${DIST_DIR}" -name "*darwin*.tar.gz" | head -n 1 || true)"
+MAC_TAR="$(find "${DIST_DIR}" -name "*darwin-${HOST_PKG_ARCH}.tar.gz" | sed -n '1p' || true)"
+if [ -z "${MAC_TAR}" ]; then
+    MAC_TAR="$(find "${DIST_DIR}" -name "*darwin*.tar.gz" | sed -n '1p' || true)"
+fi
 if [ -n "${MAC_TAR}" ] && [ -f "${MAC_TAR}" ]; then
     TMP_MAC_DIR="$(mktemp -d /tmp/openaudit-clean-mac.XXXXXX)"
     tar -xzf "${MAC_TAR}" -C "${TMP_MAC_DIR}"
 
-    echo "[*] Testing unpacked portable bundle in ${TMP_MAC_DIR}..."
+    echo "[*] Testing unpacked portable bundle ($(basename "${MAC_TAR}")) in ${TMP_MAC_DIR}..."
     "${TMP_MAC_DIR}/stage-tar/bin/openaudit" version
+    "${TMP_MAC_DIR}/stage-tar/bin/openaudit-server" --version
+    "${TMP_MAC_DIR}/stage-tar/bin/openaudit-agent" --version
     "${TMP_MAC_DIR}/stage-tar/bin/openaudit" scan --format human
     "${TMP_MAC_DIR}/stage-tar/bin/openaudit" report --format html --output "${TMP_MAC_DIR}/mac-report.html"
 
