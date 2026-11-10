@@ -437,10 +437,7 @@ impl AgentClient {
     }
 
     /// Executes a dispatched job using typed allowlisted engines only.
-    pub async fn execute_job(
-        &self,
-        job: &DispatchedJob,
-    ) -> Result<Vec<AgentFindingPayload>, String> {
+    pub fn execute_job(&self, job: &DispatchedJob) -> Result<Vec<AgentFindingPayload>, String> {
         // Strict allowlist: reject any unrecognized or arbitrary shell execution!
         match job.assessment_type.as_str() {
             "host_audit" | "local_host" => {
@@ -449,7 +446,7 @@ impl AgentClient {
             }
             "perimeter_scan" | "remote_network" => {
                 // Execute bounded perimeter assessment
-                self.execute_perimeter_scan(job).await
+                self.execute_perimeter_scan(job)
             }
             unsupported => Err(format!(
                 "assessment type '{unsupported}' is not allowlisted for agent execution"
@@ -482,7 +479,7 @@ impl AgentClient {
     }
 
     /// Executes perimeter assessment rules.
-    async fn execute_perimeter_scan(
+    fn execute_perimeter_scan(
         &self,
         job: &DispatchedJob,
     ) -> Result<Vec<AgentFindingPayload>, String> {
@@ -514,7 +511,7 @@ impl AgentClient {
                 job.id, job.assessment_type
             );
 
-            match self.execute_job(&job).await {
+            match self.execute_job(&job) {
                 Ok(findings) => {
                     let summary = json!({
                         "findings_count": findings.len(),

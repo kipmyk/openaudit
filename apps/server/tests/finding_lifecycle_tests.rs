@@ -297,7 +297,7 @@ async fn test_m7_verified_remediation_and_unverified_omission() {
         .record_job_findings_and_reconcile_lifecycle(org.id, job2.id, &[], &target_rules)
         .await
         .unwrap();
-    assert!(recorded_scan2.is_empty());
+    assert_eq!(recorded_scan2.len(), 0);
 
     // 6. Verified Remediation: FTP rule was evaluated and finding disappeared -> Resolved
     let ftp_managed = store

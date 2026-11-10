@@ -317,10 +317,10 @@ impl SqliteControlPlaneStore {
 #[async_trait::async_trait]
 impl ControlPlaneStore for SqliteControlPlaneStore {
     async fn is_healthy(&self) -> bool {
-        self.conn
-            .lock()
-            .map(|c| c.query_row("SELECT 1", [], |_| Ok(())).is_ok())
-            .unwrap_or(false)
+        let Ok(c) = self.conn.lock() else {
+            return false;
+        };
+        c.query_row("SELECT 1", [], |_| Ok(())).is_ok()
     }
 
     async fn bootstrap_admin(
@@ -3966,7 +3966,7 @@ mod tests {
             .list_findings(org2.id, Some(job.id), None)
             .await
             .expect("List findings query must succeed");
-        assert!(isolated_findings.is_empty());
+        assert_eq!(isolated_findings.len(), 0);
 
         // Test Token Revocation
         let jti = Uuid::new_v4();

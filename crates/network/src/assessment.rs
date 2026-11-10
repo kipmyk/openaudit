@@ -417,7 +417,7 @@ impl PerimeterAssessor {
         }
 
         // Sort findings by severity: Critical -> High -> Medium -> Low -> Info
-        unified_findings.sort_by(|a, b| a.severity.cmp(&b.severity));
+        unified_findings.sort_by_key(|a| a.severity);
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 

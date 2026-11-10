@@ -199,7 +199,7 @@ fn test_full_integrated_perimeter_workflow() {
     assert!(report.http_assessment.is_some());
 
     // Verify unified findings collection
-    assert!(!report.findings.is_empty());
+    assert_ne!(report.findings.len(), 0);
 
     // Verify architectural disclaimer
     assert!(report

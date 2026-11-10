@@ -376,6 +376,7 @@ fn run_desktop_app() -> Result<ExitCode, Box<dyn std::error::Error>> {
     });
 }
 
+#[cfg(target_os = "macos")]
 #[allow(clippy::too_many_lines)]
 fn render_html_report(report: &openaudit_engine::AuditReport) -> String {
     use std::fmt::Write;

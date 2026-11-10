@@ -648,5 +648,5 @@ async fn test_m8_complete_self_hosted_workflow_and_restart_persistence() {
     assert_eq!(st_cross_f, StatusCode::NOT_FOUND);
 
     // Verify org_id string is non-empty
-    assert!(!org_id.is_empty());
+    assert_ne!(org_id.len(), 0);
 }

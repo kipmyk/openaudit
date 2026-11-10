@@ -209,8 +209,9 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
         .list_findings(org2.id, Some(job.id), None)
         .await
         .expect("Query must succeed");
-    assert!(
-        findings_org2.is_empty(),
+    assert_eq!(
+        findings_org2.len(),
+        0,
         "Tenant 2 must receive zero findings from Tenant 1"
     );
 
@@ -477,7 +478,7 @@ async fn test_postgres_m7_finding_lifecycle_and_posture() {
         .record_job_findings_and_reconcile_lifecycle(org.id, job2.id, &[], &scan2_rules)
         .await
         .unwrap();
-    assert!(created2.is_empty());
+    assert_eq!(created2.len(), 0);
 
     // In Postgres: TLS cert finding is VerifiedRemediated
     let resolved_tls = store

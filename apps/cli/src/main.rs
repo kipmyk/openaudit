@@ -1578,7 +1578,7 @@ mod tests {
         let args = NetworkScanCliArgs::default();
         assert_eq!(args.target, None);
         assert!(!args.authorized);
-        assert!(args.allow_cidr.is_empty());
+        assert_eq!(args.allow_cidr.len(), 0);
         assert!(!args.allow_loopback);
         assert_eq!(args.profile, PerimeterProfile::Standard);
         assert_eq!(args.format, OutputFormat::Human);

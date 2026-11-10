@@ -794,7 +794,7 @@ async fn test_m6_e2e_agent_client_and_server_lifecycle() {
         .list_findings(Uuid::parse_str(&org_id).unwrap(), Some(job.id), None)
         .await
         .unwrap();
-    assert!(!findings.is_empty());
+    assert_ne!(findings.len(), 0);
     assert!(findings[0].evidence.contains("[Agent:"));
 
     // 7. Test Credential Rotation

@@ -343,6 +343,7 @@ fn test_rule_accounting_semantics_partitioning_and_profile_invariants() {
     let baseline_report = engine
         .run_audit_with_profile(org_id, AuditProfile::Baseline)
         .expect("Baseline audit must succeed");
+    assert_eq!(baseline_report.check_statuses.len(), 43);
 
     #[cfg(target_os = "macos")]
     {
