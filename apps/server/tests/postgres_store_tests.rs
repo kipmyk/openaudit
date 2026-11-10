@@ -523,3 +523,106 @@ async fn test_postgres_m7_finding_lifecycle_and_posture() {
     assert_eq!(summary.total_active_findings, 1);
     assert_eq!(summary.verified_remediations_count, 1);
 }
+
+#[tokio::test]
+async fn test_postgres_m8_bounded_credential_rotation_grace_period() {
+    let _lock = PG_TEST_LOCK.lock().await;
+    let Some(pg_url) = get_postgres_url() else {
+        return;
+    };
+
+    let Ok(store) = PostgresControlPlaneStore::connect(&pg_url).await else {
+        return;
+    };
+
+    truncate_tables(&pg_url).await;
+
+    let org = store
+        .create_organization("PG Rotation Corp", &format!("pg-rot-{}", Uuid::new_v4()))
+        .await
+        .unwrap();
+
+    let key1_hash = "hash_key_1_original";
+    let key2_hash = "hash_key_2_rotated";
+
+    // 1. Enroll agent with initial credential
+    let agent = store
+        .enroll_agent(
+            org.id,
+            "pg-worker-01",
+            "worker.pg.corp",
+            "0.1.0-alpha.0",
+            key1_hash,
+            "pure-crypto:pg",
+            "[\"host_audit\"]",
+        )
+        .await
+        .unwrap();
+
+    // Initial key works
+    assert!(store
+        .get_agent_by_auth_hash(key1_hash)
+        .await
+        .unwrap()
+        .is_some());
+
+    // 2. Rotate credential: key2 is primary, key1 is previous fallback
+    store
+        .rotate_agent_credential(agent.id, key2_hash)
+        .await
+        .unwrap();
+
+    // 3. Within 15-minute grace period: BOTH keys work
+    assert!(
+        store
+            .get_agent_by_auth_hash(key1_hash)
+            .await
+            .unwrap()
+            .is_some(),
+        "Fallback key must be accepted within grace period"
+    );
+    assert!(
+        store
+            .get_agent_by_auth_hash(key2_hash)
+            .await
+            .unwrap()
+            .is_some(),
+        "New key must be accepted"
+    );
+
+    // 4. Simulate passage of time past 15-minute grace period (20 minutes ago)
+    let (client, connection) = tokio_postgres::connect(&pg_url, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    client
+        .execute(
+            "UPDATE enrolled_agents SET updated_at = NOW() - INTERVAL '20 minutes' WHERE id = $1",
+            &[&agent.id],
+        )
+        .await
+        .unwrap();
+
+    // 5. Past grace period: fallback key MUST be rejected fail-closed
+    assert!(
+        store
+            .get_agent_by_auth_hash(key1_hash)
+            .await
+            .unwrap()
+            .is_none(),
+        "Expired fallback key must be rejected past grace period"
+    );
+
+    // 6. Current key continues to work normally
+    assert!(
+        store
+            .get_agent_by_auth_hash(key2_hash)
+            .await
+            .unwrap()
+            .is_some(),
+        "Current primary key must remain valid"
+    );
+}

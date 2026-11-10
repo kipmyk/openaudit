@@ -616,19 +616,51 @@ pub async fn agent_submit_results_handler(
             job_id,
             agent.org_id,
             payload.summary_json.as_deref(),
-            &findings,
+            &[],
         )
         .await
     {
-        Ok(()) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": "completed",
-                "job_id": job_id,
-                "findings_recorded": findings.len()
-            })),
-        )
-            .into_response(),
+        Ok(()) => {
+            // Reconcile findings into managed_findings lifecycle
+            let rules_evaluated: Vec<String> = payload
+                .summary_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .and_then(|v| {
+                    v.get("evaluated")
+                        .or_else(|| v.get("rules_evaluated"))
+                        .and_then(|arr| arr.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
+                })
+                .unwrap_or_else(|| findings.iter().map(|f| f.rule_id.clone()).collect());
+
+            if let Err(err) = state
+                .store
+                .record_job_findings_and_reconcile_lifecycle(
+                    agent.org_id,
+                    job_id,
+                    &findings,
+                    &rules_evaluated,
+                )
+                .await
+            {
+                tracing::error!("Failed to reconcile finding lifecycle for job {job_id}: {err}");
+            }
+
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "status": "completed",
+                    "job_id": job_id,
+                    "findings_recorded": findings.len()
+                })),
+            )
+                .into_response()
+        }
         Err(StoreError::Unauthorized(msg)) => (
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "unauthorized", "message": msg })),
