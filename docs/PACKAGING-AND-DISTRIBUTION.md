@@ -27,10 +27,10 @@ OpenAudit achieves standalone runtime execution by minimizing dynamic dependenci
 
 | Platform | Distribution Format | Primary Target Architecture | Dynamic Linking Dependencies | Static Bundling Strategy |
 | :--- | :--- | :--- | :--- | :--- |
-| **Linux (Debian/Ubuntu)** | Native `.deb` Package | `amd64`, `arm64` | `libc.so.6` (glibc $\ge 2.34$), `libm.so.6`, `libgcc_s.so.1` | SQLite (bundled C amalgamation), Ring/Rustls (pure Rust crypto), all rule definitions |
-| **Linux (Universal)** | Portable `.tar.gz` | `x86_64`, `aarch64` | `libc.so.6` (glibc $\ge 2.34$), `libm.so.6`, `libgcc_s.so.1` | Self-contained binaries (`openaudit`, `openaudit-agent`, `openaudit-server`), systemd units, udev rules |
-| **macOS** | Portable `.tar.gz` / Bundle | `aarch64` (Apple Silicon; Intel x86_64 unverified) | `/usr/lib/libSystem.B.dylib`, `CoreFoundation.framework`, `libiconv.2.dylib` | Mach-O standalone binary, embedded rules, launchd daemon plist |
-| **Windows** | Portable `.zip` / Service Installer | `x86_64` (PE64) | `KERNEL32.dll`, `ADVAPI32.dll`, `WS2_32.dll`, `NTDLL.dll` | Standalone `.exe` binaries, embedded rules, PowerShell service installer scripts |
+| **Linux (Debian/Ubuntu)** | Native `.deb` Package | `arm64` (Qualified); `amd64` (Pending x86_64 CI) | `libc.so.6` (glibc $\ge 2.34$), `libm.so.6`, `libgcc_s.so.1` | SQLite (bundled C amalgamation), Ring/Rustls (pure Rust crypto), all rule definitions |
+| **Linux (Universal)** | Portable `.tar.gz` | `aarch64` (Qualified); `x86_64` (Pending x86_64 CI) | `libc.so.6` (glibc $\ge 2.34$), `libm.so.6`, `libgcc_s.so.1` | Self-contained binaries (`openaudit`, `openaudit-agent`, `openaudit-server`), systemd units, udev rules |
+| **macOS** | Portable `.tar.gz` / Bundle | `aarch64` (Apple Silicon Qualified; Intel x86_64 unverified) | `/usr/lib/libSystem.B.dylib`, `CoreFoundation.framework`, `libiconv.2.dylib` | Mach-O standalone binary, embedded rules, launchd daemon plist |
+| **Windows** | Portable `.zip` / Service Installer | `x86_64` (PE64, Qualified via Unit Tests & CI config; pending push) | `KERNEL32.dll`, `ADVAPI32.dll`, `WS2_32.dll`, `NTDLL.dll` | Standalone `.exe` binaries, embedded rules, PowerShell service installer scripts |
 
 ---
 
@@ -40,9 +40,12 @@ We reject misleading claims of "zero dependencies." Running software on any oper
 
 ### A. Linux Unavoidable Prerequisites
 1. **Kernel Version:** Linux kernel $\ge 5.15$ with `/proc` and `/sys` virtual filesystems mounted.
-2. **C Runtime Library:** `glibc` with symbols up to `GLIBC_2.34` (verified via `objdump -p` on Debian 12 release binaries).
-   - *Validated Distribution Matrix:* Debian 12 (Bookworm, glibc 2.36), Debian 13 (Trixie, glibc 2.40+), and Ubuntu 24.04 (Noble, glibc 2.39).
-   - *Compatibility Boundary:* Ubuntu 22.04 (Jammy, glibc 2.35) remains unvalidated and is not included in the supported distribution matrix until explicitly tested against clean environments.
+2. **C Runtime Library (glibc):**
+   - **Empirical Symbol Inspection:** Inspection of release binaries using `readelf -V` confirms symbol references spanning `GLIBC_2.17` up to a maximum requirement of `GLIBC_2.34`.
+   - **Supported Baseline:** Any Linux system providing `glibc >= 2.34` satisfies all dynamic symbol requirements. Distributions with older glibc (< 2.34, such as Debian 11 with glibc 2.31 or Ubuntu 20.04 with glibc 2.31) fail closed with dynamic linker symbol errors.
+   - **Validated Distribution Matrix:** Debian 12 (Bookworm, glibc 2.36), Debian 13 (Trixie, glibc 2.40+), and Ubuntu 24.04 (Noble, glibc 2.39).
+   - **Compatibility Boundary:** Ubuntu 22.04 (Jammy, glibc 2.35) meets the symbol threshold (`glibc >= 2.34`) but remains unvalidated in clean acceptance suites and is not included until explicitly tested.
+   - **Architecture Qualification:** Clean OS package installation and execution is strictly verified on **ARM64 / aarch64**. Linux `x86_64` / `amd64` packages are not qualified on local ARM64 hardware and require validation on x86_64 runners.
 3. **Execution Privileges:**
    - Standalone CLI unprivileged scan: Inspects user-accessible configurations, sysctl, environment, open sockets.
    - Privileged scan: Requires `root` or `sudo` to inspect `/etc/shadow`, `/etc/sudoers`, `/boot`, raw firewall rules (`iptables`/`nftables`), and privileged system accounts.
