@@ -49,3 +49,4 @@ First Public Alpha milestone combining cross-platform host auditing, agentless p
 ## [v0.2.0-m2] - Milestone M2 Release (Immutable Baseline)
 
 - Completed Milestone M2: Linux Auditing Engine with 20 deterministic rules validated against 55 empirical lab scenarios on Ubuntu 24.04 LTS (100% precision and recall).
+
