@@ -47,7 +47,7 @@ der = "0.7"
 rsa = { version = "0.9", default-features = false, features = ["std"] }
 p256 = { version = "0.13", default-features = false, features = ["arithmetic", "std"] }
 regex = "1.11"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 tempfile = "3.17"
 rustix = { version = "1.1", features = ["fs"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
