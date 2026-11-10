@@ -52,17 +52,54 @@ trap cleanup EXIT INT TERM
 # Run container with workspace mount and persistent Cargo caching
 run_in_container() {
     local cmd="$1"
+    local net_args=(--add-host=host.docker.internal:host-gateway)
+    if [[ -n "${OPENAUDIT_DOCKER_NETWORK:-}" ]]; then
+        net_args=(--network "${OPENAUDIT_DOCKER_NETWORK}")
+    fi
     docker run --rm \
         --name "${CONTAINER_NAME}" \
+        "${net_args[@]}" \
         -v "${WORKSPACE_ROOT}:/workspace" \
         -v "openaudit-cargo-registry:/usr/local/cargo/registry" \
         -v "openaudit-cargo-git:/usr/local/cargo/git" \
         -v "openaudit-cargo-target:/target-linux" \
         -e CARGO_TARGET_DIR=/target-linux \
         -e CARGO_TERM_COLOR=always \
+        -e OPENAUDIT_TEST_POSTGRES_URL="${OPENAUDIT_TEST_POSTGRES_URL:-}" \
+        -e TEST_DATABASE_URL="${TEST_DATABASE_URL:-}" \
+        -e OPENAUDIT_REQUIRE_POSTGRES_TESTS="${OPENAUDIT_REQUIRE_POSTGRES_TESTS:-}" \
         -w /workspace \
         "${IMAGE_NAME}" \
         bash -c "${cmd}"
+}
+
+ensure_local_postgres() {
+    if [[ -n "${OPENAUDIT_TEST_POSTGRES_URL:-}" || -n "${TEST_DATABASE_URL:-}" ]]; then
+        export OPENAUDIT_REQUIRE_POSTGRES_TESTS="${OPENAUDIT_REQUIRE_POSTGRES_TESTS:-1}"
+        return 0
+    fi
+    local pg_container="openaudit-postgres-test"
+    if ! docker ps --format '{{.Names}}' | grep -q "^${pg_container}$"; then
+        echo "[*] Starting local PostgreSQL 16 test container (${pg_container}) on 127.0.0.1:5433..."
+        docker rm -f "${pg_container}" >/dev/null 2>&1 || true
+        docker run -d \
+            --name "${pg_container}" \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=openaudit_test \
+            -p 127.0.0.1:5433:5432 \
+            postgres:16-alpine >/dev/null
+    fi
+    for _ in $(seq 1 30); do
+        if docker exec "${pg_container}" pg_isready -U postgres -d openaudit_test >/dev/null 2>&1; then
+            export OPENAUDIT_TEST_POSTGRES_URL="postgres://postgres:postgres@host.docker.internal:5433/openaudit_test"
+            export OPENAUDIT_REQUIRE_POSTGRES_TESTS="1"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "[-] Error: PostgreSQL test container (${pg_container}) failed readiness check." >&2
+    exit 1
 }
 
 SUITE="${1:-all}"
@@ -81,6 +118,7 @@ case "${SUITE}" in
         run_in_container "cargo build --bins"
         ;;
     test)
+        ensure_local_postgres
         echo "[*] Running: cargo test --workspace --verbose"
         run_in_container "cargo test --workspace --verbose"
         ;;
@@ -113,7 +151,8 @@ case "${SUITE}" in
         echo "[+] Workspace binaries compiled successfully."
 
         echo ""
-        echo "[4/6] Executing complete workspace test suite (including TPM emulation)..."
+        echo "[4/6] Executing complete workspace test suite (including TPM emulation & PostgreSQL)..."
+        ensure_local_postgres
         run_in_container "cargo test --workspace --verbose"
         echo "[+] Complete workspace tests passed."
 

@@ -25,14 +25,37 @@ use openaudit_server::store::models::{
 use openaudit_server::store::postgres::PostgresControlPlaneStore;
 use openaudit_server::store::{ControlPlaneStore, StoreError};
 
-fn get_postgres_url() -> Option<String> {
-    if let Ok(url) = env::var("TEST_DATABASE_URL") {
-        if !url.trim().is_empty() {
-            return Some(url);
+fn resolve_postgres_config() -> (String, bool) {
+    for var in ["OPENAUDIT_TEST_POSTGRES_URL", "TEST_DATABASE_URL"] {
+        if let Ok(url) = env::var(var) {
+            let trimmed = url.trim();
+            if !trimmed.is_empty() {
+                return (trimmed.to_string(), true);
+            }
         }
     }
-    // Default local test container URL
-    Some("postgres://postgres:postgres@127.0.0.1:5433/openaudit_test".to_string())
+    let require_pg = env::var("OPENAUDIT_REQUIRE_POSTGRES_TESTS")
+        .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "yes"))
+        .unwrap_or(false);
+    (
+        "postgres://postgres:postgres@127.0.0.1:5433/openaudit_test".to_string(),
+        require_pg,
+    )
+}
+
+async fn connect_postgres_store() -> Option<(PostgresControlPlaneStore, String)> {
+    let (pg_url, required) = resolve_postgres_config();
+    match PostgresControlPlaneStore::connect(&pg_url).await {
+        Ok(store) => Some((store, pg_url)),
+        Err(err) => {
+            assert!(
+                !required,
+                "PostgreSQL integration test database is required but connection to '{pg_url}' failed: {err}"
+            );
+            eprintln!("PostgreSQL connection failed ({err}); skipping test because no explicit OPENAUDIT_TEST_POSTGRES_URL was required");
+            None
+        }
+    }
 }
 
 static PG_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -55,17 +78,8 @@ async fn truncate_tables(pg_url: &str) {
 #[tokio::test]
 async fn test_postgres_full_persistence_and_isolation_lifecycle() {
     let _lock = PG_TEST_LOCK.lock().await;
-    let Some(pg_url) = get_postgres_url() else {
-        eprintln!("Skipping PostgreSQL integration test: no test database URL configured");
+    let Some((store, pg_url)) = connect_postgres_store().await else {
         return;
-    };
-
-    let store = match PostgresControlPlaneStore::connect(&pg_url).await {
-        Ok(s) => s,
-        Err(err) => {
-            eprintln!("PostgreSQL connection failed ({err}); skipping test if database not active");
-            return;
-        }
     };
 
     assert!(store.is_healthy().await, "PostgreSQL store must be healthy");
@@ -386,11 +400,7 @@ async fn test_postgres_full_persistence_and_isolation_lifecycle() {
 #[tokio::test]
 async fn test_postgres_m7_finding_lifecycle_and_posture() {
     let _lock = PG_TEST_LOCK.lock().await;
-    let Some(pg_url) = get_postgres_url() else {
-        return;
-    };
-
-    let Ok(store) = PostgresControlPlaneStore::connect(&pg_url).await else {
+    let Some((store, pg_url)) = connect_postgres_store().await else {
         return;
     };
 
@@ -528,14 +538,14 @@ async fn test_postgres_m7_finding_lifecycle_and_posture() {
 #[tokio::test]
 async fn test_postgres_m8_bounded_credential_rotation_grace_period() {
     let _lock = PG_TEST_LOCK.lock().await;
-    let Some(pg_url) = get_postgres_url() else {
+    let Some((store, pg_url)) = connect_postgres_store().await else {
         return;
     };
 
-    let Ok(store) = PostgresControlPlaneStore::connect(&pg_url).await else {
-        return;
-    };
-
+    store
+        .migrate()
+        .await
+        .expect("Migrations must succeed in PG");
     truncate_tables(&pg_url).await;
 
     let org = store
@@ -625,5 +635,193 @@ async fn test_postgres_m8_bounded_credential_rotation_grace_period() {
             .unwrap()
             .is_some(),
         "Current primary key must remain valid"
+    );
+}
+
+#[tokio::test]
+async fn test_postgres_concurrent_job_claiming_and_transaction_atomicity() {
+    let _lock = PG_TEST_LOCK.lock().await;
+    let Some((store, pg_url)) = connect_postgres_store().await else {
+        return;
+    };
+
+    store
+        .migrate()
+        .await
+        .expect("Migrations must succeed in PG");
+    truncate_tables(&pg_url).await;
+
+    let org1 = store
+        .create_organization(
+            "PG Concurrency Org 1",
+            &format!("pg-conc-1-{}", Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+    let org2 = store
+        .create_organization(
+            "PG Concurrency Org 2",
+            &format!("pg-conc-2-{}", Uuid::new_v4()),
+        )
+        .await
+        .unwrap();
+
+    // Create 3 pending jobs in Org 1
+    let mut expected_job_ids = Vec::new();
+    for idx in 0..3 {
+        let job = store
+            .create_job(
+                org1.id,
+                None,
+                &format!("10.20.0.{idx}"),
+                "host_audit",
+                "standard",
+            )
+            .await
+            .unwrap();
+        expected_job_ids.push(job.id);
+    }
+
+    // Enroll 6 agents in Org 1 and 2 agents in Org 2
+    let mut org1_agents = Vec::new();
+    for idx in 0..6 {
+        let agent = store
+            .enroll_agent(
+                org1.id,
+                &format!("org1-worker-{idx}"),
+                &format!("w{idx}.org1.pg"),
+                "0.1.0-alpha.0",
+                &format!("org1_auth_hash_{idx}_{}", Uuid::new_v4()),
+                "spki-der-org1",
+                "[\"host_audit\"]",
+            )
+            .await
+            .unwrap();
+        org1_agents.push(agent);
+    }
+
+    let mut org2_agents = Vec::new();
+    for idx in 0..2 {
+        let agent = store
+            .enroll_agent(
+                org2.id,
+                &format!("org2-worker-{idx}"),
+                &format!("w{idx}.org2.pg"),
+                "0.1.0-alpha.0",
+                &format!("org2_auth_hash_{idx}_{}", Uuid::new_v4()),
+                "spki-der-org2",
+                "[\"host_audit\"]",
+            )
+            .await
+            .unwrap();
+        org2_agents.push(agent);
+    }
+
+    // Spawn 8 concurrent claim tasks (6 in Org 1, 2 in Org 2)
+    let mut handles = Vec::new();
+    for agent in &org1_agents {
+        let store_clone = store.clone();
+        let agent_id = agent.id;
+        let org_id = org1.id;
+        handles.push(tokio::spawn(async move {
+            (
+                org_id,
+                agent_id,
+                store_clone
+                    .claim_next_pending_job(agent_id, org_id, 60)
+                    .await
+                    .expect("Concurrent claim must not error"),
+            )
+        }));
+    }
+    for agent in &org2_agents {
+        let store_clone = store.clone();
+        let agent_id = agent.id;
+        let org_id = org2.id;
+        handles.push(tokio::spawn(async move {
+            (
+                org_id,
+                agent_id,
+                store_clone
+                    .claim_next_pending_job(agent_id, org_id, 60)
+                    .await
+                    .expect("Concurrent claim must not error"),
+            )
+        }));
+    }
+
+    let mut claimed_jobs = Vec::new();
+    for handle in handles {
+        let (org_id, agent_id, claimed_opt) = handle.await.unwrap();
+        if let Some(claimed) = claimed_opt {
+            assert_eq!(org_id, org1.id, "Org 2 agent must never claim Org 1 job");
+            assert_eq!(claimed.assigned_agent_id, Some(agent_id));
+            claimed_jobs.push((agent_id, claimed.id));
+        }
+    }
+
+    assert_eq!(
+        claimed_jobs.len(),
+        3,
+        "Exactly 3 of the 6 Org 1 agents must claim the 3 pending jobs without double-claiming"
+    );
+    let mut unique_ids: Vec<Uuid> = claimed_jobs.iter().map(|(_, jid)| *jid).collect();
+    unique_ids.sort();
+    expected_job_ids.sort();
+    assert_eq!(unique_ids, expected_job_ids);
+
+    // Verify transactional rejection when an unassigned agent or wrong org attempts to complete a claimed job
+    let (assigned_agent_id, target_job_id) = claimed_jobs[0];
+    let wrong_agent_id = org1_agents
+        .iter()
+        .find(|a| a.id != assigned_agent_id)
+        .unwrap()
+        .id;
+    let bogus_finding = NewFinding {
+        rule_id: "pg.tx.rollback".into(),
+        severity: "High".into(),
+        confidence: "Confirmed".into(),
+        title: "Should Not Persist".into(),
+        endpoint: "tx-endpoint".into(),
+        evidence: "unauthorized".into(),
+        recommendation: "none".into(),
+    };
+
+    let unauthorized_complete = store
+        .complete_agent_job(
+            wrong_agent_id,
+            target_job_id,
+            org1.id,
+            Some(r#"{"tampered":true}"#),
+            std::slice::from_ref(&bogus_finding),
+        )
+        .await;
+    assert!(
+        unauthorized_complete.is_err(),
+        "Unassigned agent completion must fail transactionally"
+    );
+
+    let cross_tenant_complete = store
+        .complete_agent_job(
+            assigned_agent_id,
+            target_job_id,
+            org2.id,
+            Some(r#"{"tampered":true}"#),
+            std::slice::from_ref(&bogus_finding),
+        )
+        .await;
+    assert!(
+        cross_tenant_complete.is_err(),
+        "Cross-tenant completion must fail transactionally"
+    );
+
+    // Verify zero findings were persisted from the rejected completion attempts
+    let persisted_findings = store
+        .list_findings(org1.id, Some(target_job_id), None)
+        .await
+        .unwrap();
+    assert!(
+        persisted_findings.is_empty(),
+        "Rejected completion transaction must roll back and leave zero findings"
     );
 }
